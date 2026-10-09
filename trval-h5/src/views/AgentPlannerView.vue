@@ -34,7 +34,7 @@ const showDatePopup = ref(false)
 const dayOptions = [1, 2, 3, 4, 5, 6, 7]
 const monthGroups = [[7, 8, 9], [10, 11, 12], [1, 2, 3], [4, 5, 6]]
 const selectDay = (d) => { selectedDays.value = selectedDays.value === d ? null : d }
-const dayMax = 30
+const dayMax = 14
 const incDay = () => { selectedDays.value = Math.min((selectedDays.value || 0) + 1, dayMax) }
 const decDay = () => { if (selectedDays.value) selectedDays.value = Math.max(selectedDays.value - 1, 1) }
 const dayInput = computed({
@@ -57,18 +57,21 @@ const travelers = reactive({ adult: 2, child: 0, senior: 0 })
 const travelerTouched = ref(false)
 const showTravelerPopup = ref(false)
 const travelerMax = 20
-const incTraveler = (k) => { if (travelers[k] < travelerMax) { travelers[k]++; travelerTouched.value = true } }
+const incTraveler = (k) => { if (totalPeople.value < travelerMax) { travelers[k]++; travelerTouched.value = true } }
 const decTraveler = (k) => { if (travelers[k] > 0) { travelers[k]--; travelerTouched.value = true } }
-// 每个分类都可直接编辑，夹在 0–travelerMax
+// 分类可编辑，总人数不超过后端支持的 20 人。
 const makeTravelerInput = (key) => computed({
   get: () => travelers[key],
-  set: (v) => { const n = parseInt(v, 10); travelers[key] = Number.isNaN(n) ? 0 : Math.max(0, Math.min(n, travelerMax)); travelerTouched.value = true }
+  set: (v) => { const n = parseInt(v, 10); const available = travelerMax - (totalPeople.value - travelers[key]); travelers[key] = Number.isNaN(n) ? 0 : Math.max(0, Math.min(n, available)); travelerTouched.value = true }
 })
 const adultInput = makeTravelerInput('adult')
 const childInput = makeTravelerInput('child')
 const seniorInput = makeTravelerInput('senior')
 const totalPeople = computed(() => travelers.adult + travelers.child + travelers.senior)
-const travelerDone = () => { showTravelerPopup.value = false }
+const travelerDone = () => {
+  if (totalPeople.value < 1 || totalPeople.value > travelerMax) { showToast(t('agent.travelerLimit')); return }
+  showTravelerPopup.value = false
+}
 const hasTravelers = computed(() => travelerTouched.value || travelers.child > 0 || travelers.senior > 0)
 const travelerBadge = computed(() => hasTravelers.value ? `${totalPeople.value}${t('common.people')}` : '')
 
@@ -247,7 +250,8 @@ const loadConfig = () => {
 }
 watch([origin, destination, selectedDays, selectedMonths, budget, totalBudget, travelerTouched, travelers, preferences], saveConfig, { deep: true })
 
-const canSubmit = computed(() => destination.value.trim() && (selectedDays.value || summarySegments.value.length))
+const canSubmit = computed(() => destination.value.trim() && (selectedDays.value || summarySegments.value.length)
+  && (!selectedDays.value || selectedDays.value <= dayMax) && totalPeople.value >= 1 && totalPeople.value <= travelerMax)
 const isGenerating = ref(false)
 
 // 把前端选项值（如'四钻/星高档型'）按前缀映射为后端枚举：经济型/舒适型/豪华型
@@ -506,6 +510,7 @@ onMounted(() => {
             </button>
           </div>
         </div>
+        <p class="t-range">{{ t('agent.budgetPriorityHint') }}</p>
         <button class="popup-done" @click="budgetDone">{{ t('common.done') }}</button>
       </div>
     </van-popup>

@@ -174,7 +174,7 @@ onMounted(() => { loadHotels(currentCity.value) })
   background: transparent;
   box-sizing: border-box;
   padding-bottom: calc(62px + var(--safe-area-bottom) + 16px);
-  overflow-x: hidden;
+  overflow-x: clip;
 }
 :deep(.nav-bar) {
   background: linear-gradient(135deg, rgba(233,213,255,0.9) 0%, rgba(240,249,255,0.9) 50%, rgba(253,244,255,0.9) 100%);

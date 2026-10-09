@@ -29,27 +29,35 @@ const tabs = [
 const orders = ref([])
 const isLoading = ref(false)
 const loadError = ref(false)
+const page = ref(0)
+const pageSize = 20
+const hasMore = ref(false)
 
 // BUGID TAB-1 修复：请求序号计数器，快速切 Tab 时丢弃过期响应
 let loadSeq = 0
 
-const loadOrders = async (type = '') => {
+const loadOrders = async (type = '', append = false) => {
+  if (append && (isLoading.value || !hasMore.value)) return
   const seq = ++loadSeq
+  const nextPage = append ? page.value + 1 : 0
   isLoading.value = true
   loadError.value = false
   try {
-    const response = await orderApi.getOrders(type)
+    const response = await orderApi.getOrders(type, nextPage, pageSize)
     if (seq !== loadSeq) return // BUGID TAB-1：旧请求晚回，丢弃
     if (response.code === 0) {
-      orders.value = response.data || []
+      const batch = response.data || []
+      orders.value = append ? [...orders.value, ...batch] : batch
+      page.value = nextPage
+      hasMore.value = batch.length === pageSize
     } else {
-      orders.value = []
+      throw new Error(response.message || '加载订单失败')
     }
   } catch (error) {
     if (seq !== loadSeq) return // BUGID TAB-1：旧请求晚回，丢弃
     console.log('获取订单列表失败:', error)
-    orders.value = []
-    if (error?.response?.status === 502) loadError.value = true
+    if (!append) orders.value = []
+    loadError.value = true
   } finally {
     if (seq === loadSeq) isLoading.value = false
   }
@@ -71,12 +79,13 @@ const handlePay = async (order) => {
     // 走支付对接层：先发起支付拿到渠道支付地址，再完成支付
     const res = await paymentApi.createPayment(order.id)
     if (res.code === 0) {
-      // 模拟渠道：跳转 mock 支付地址即完成支付（真实渠道此处跳第三方收银台）
-      const mock = await paymentApi.mockPay(res.data.orderNo)
-      if (mock.code === 0) {
-        showToast(t('payment.mockSuccess'))
+      if (res.data.channel === 'mock') {
+        const mock = await paymentApi.mockPay(res.data.orderNo)
+        showToast(mock.code === 0 ? t('payment.mockSuccess') : (mock.message || t('payment.payFail')))
       } else {
-        showToast(mock.message || t('payment.payFail'))
+        const payUrl = new URL(res.data.payUrl)
+        if (payUrl.protocol !== 'https:') throw new Error('支付地址必须使用 HTTPS')
+        window.location.assign(payUrl.href)
       }
     } else {
       showToast(res.message || t('payment.payFail'))
@@ -218,6 +227,7 @@ onMounted(() => {
 
 /* 【性能优化】离开时清理状态 */
 onDeactivated(() => {
+  loadSeq += 1
   isLoading.value = false
   loadError.value = false
   showRefundPopup.value = false
@@ -253,10 +263,10 @@ onDeactivated(() => {
       <transition name="tab-fade" mode="out-in">
         <div :key="activeTab">
           <!-- 骨架屏加载 -->
-          <van-skeleton v-if="isLoading" title avatar row="3" />
+          <van-skeleton v-if="isLoading && orders.length === 0" title avatar row="3" />
 
           <!-- 错误兜底 -->
-          <div v-else-if="loadError" class="error-state">
+          <div v-else-if="loadError && orders.length === 0" class="error-state">
             <van-icon name="warn-o" size="48" color="#94A3B8" />
             <p class="error-text">{{ t('common.requestFailed') }}</p>
             <van-button round plain type="primary" size="small" class="retry-btn" @click="loadOrders(activeTab === 'all' ? '' : activeTab)">{{ t('common.retry') }}</van-button>
@@ -316,6 +326,10 @@ onDeactivated(() => {
                 </div>
               </div>
             </div>
+            <van-button v-if="hasMore" block plain :loading="isLoading" @click="loadOrders(activeTab === 'all' ? '' : activeTab, true)">
+              {{ loadError ? t('common.retry') : t('orders.loadMore') }}
+            </van-button>
+            <p v-else class="error-text">{{ t('orders.noMore') }}</p>
           </div>
         </div>
       </transition>
@@ -419,7 +433,7 @@ onDeactivated(() => {
   background: transparent;
   padding-bottom: calc(62px + var(--safe-area-bottom) + 16px);
   box-sizing: border-box;
-  overflow-x: hidden;
+  overflow-x: clip;
 }
 
 /* ==================== 导航栏 ==================== */

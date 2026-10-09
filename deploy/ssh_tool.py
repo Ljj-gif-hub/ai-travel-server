@@ -52,6 +52,7 @@ def main():
     ap.add_argument("--run", help="执行远程命令")
     ap.add_argument("--timeout", type=int, default=3600)
     ap.add_argument("--upload", help="上传本地文件")
+    ap.add_argument("--download", help="下载远程文件")
     ap.add_argument("--remote", help="上传目标路径")
     ap.add_argument("--tar", help="上传 tar.gz 并解压")
     ap.add_argument("--extract", help="--tar 的解压目标目录")
@@ -71,6 +72,12 @@ def main():
         sftp.put(args.upload, args.remote)
         sftp.close()
         print(f"[OK] 上传完成 {args.upload} -> {args.remote}")
+
+    if args.download and args.remote:
+        sftp = c.open_sftp()
+        sftp.get(args.download, args.remote)
+        sftp.close()
+        print(f"[OK] 下载完成 {args.download} -> {args.remote}")
 
     if args.tar and args.extract:
         sftp = c.open_sftp()

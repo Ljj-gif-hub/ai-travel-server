@@ -18,6 +18,7 @@ let fetchMock
 beforeEach(() => {
   sessionStorage.clear()
   localStorage.clear()
+  window.location.hash = '#/'
   fetchMock = vi.fn()
   vi.stubGlobal('fetch', fetchMock)
 })
@@ -122,6 +123,7 @@ describe('401 单飞刷新 Token', () => {
   })
 
   it('刷新失败（refresh 401）→ 清会话并跳登录页', async () => {
+    window.location.hash = '#/orders'
     sessionStorage.setItem('TOKEN', 't1')
     sessionStorage.setItem('REFRESH_TOKEN', 'rt1')
     fetchMock.mockImplementation((url) => {
@@ -135,6 +137,15 @@ describe('401 单飞刷新 Token', () => {
     expect(sessionStorage.getItem('TOKEN')).toBeNull()
     expect(sessionStorage.getItem('REFRESH_TOKEN')).toBeNull()
     expect(window.location.hash).toContain('/login')
+  })
+
+  it('公开页刷新失败清理会话，但不强制跳转', async () => {
+    sessionStorage.setItem('TOKEN', 'expired')
+    sessionStorage.setItem('REFRESH_TOKEN', 'expired-refresh')
+    fetchMock.mockResolvedValue(httpError(401))
+    await expect(request('/public-page-profile')).rejects.toMatchObject({ status: 401 })
+    expect(sessionStorage.getItem('TOKEN')).toBeNull()
+    expect(window.location.hash).toBe('#/')
   })
 
   it('登录等豁免接口自身 401 不触发刷新流程', async () => {

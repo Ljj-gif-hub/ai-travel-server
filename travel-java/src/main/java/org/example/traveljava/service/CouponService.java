@@ -105,6 +105,9 @@ public class CouponService {
         if (order.getCouponId() != null) {
             throw new IllegalArgumentException("该订单已使用优惠券，不可叠加使用");
         }
+        if (order.getPayTradeNo() != null) {
+            throw new IllegalArgumentException("订单已发起支付，不可再修改金额");
+        }
         if (order.getPrice() < coupon.getMinAmount()) {
             throw new IllegalArgumentException("订单金额未达优惠券使用门槛");
         }
@@ -119,12 +122,8 @@ public class CouponService {
         long discount = Math.min(coupon.getValue().longValue(), order.getPrice());
         int updated = orderRepository.applyCouponIfPending(orderId, discount, couponId, (int) discount);
         if (updated == 0) {
-            // 订单状态已变（被并发支付/取消），回滚优惠券占用
-            coupon.setStatus("unused");
-            coupon.setUsedAt(null);
-            coupon.setOrderId(null);
-            couponRepository.save(coupon);
-            throw new IllegalStateException("订单状态已变更，优惠券使用失败");
+            // RuntimeException 回滚整笔事务，包括前面的 claimCoupon。
+            throw new IllegalArgumentException("订单状态、金额或优惠券已变更，请刷新重试");
         }
 
         Coupon saved = couponRepository.findById(couponId)

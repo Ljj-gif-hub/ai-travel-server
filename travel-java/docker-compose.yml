@@ -1,9 +1,10 @@
 # ================================================================
-# 生产部署编排：MySQL + Redis + RabbitMQ + 应用 + Agent 微服务（可横向扩容）
+# 生产部署编排：MySQL + Redis + RabbitMQ + 应用（可扩容）+ Agent（单实例）
 #
 # 用法：
 #   docker compose up -d --build              # 构建并启动
 #   docker compose up -d --build --scale app=2   # 2 个应用实例（配合 nginx 负载均衡）
+#   docker compose exec nginx nginx -s reload  # app 实例数变化后重新解析上游地址
 #
 # 环境变量可在 .env 中覆盖，最小必填：JWT_SECRET（应用启动强制校验）、
 # AGENT_API_KEY（后端↔Agent 共享密钥，两端必须一致）
@@ -80,9 +81,11 @@ services:
       AMAP_WEB_KEY: ${AMAP_WEB_KEY:-}
       # MCP（可选）
       MCP_SERVER_ENABLED: ${MCP_SERVER_ENABLED:-false}
-    ports:
-      # 仅内网可达，公网统一走 nginx:80（agent 已被鉴权中间件保护）
-      - "127.0.0.1:3201:3201"
+    expose:
+      - "3201"
+    volumes:
+      - agent-data:/app/data
+    # JSON 记忆存储目前仅支持单实例/单 worker；不要 scale agent-service。
 
   app:
     build: .
@@ -110,8 +113,8 @@ services:
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_USERNAME: ${RABBITMQ_USER:?请设置 RABBITMQ_USER}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?请设置 RABBITMQ_PASSWORD}
-      # 【RATE-1 修复】信任 nginx 注入的 X-Real-IP（仅公网走 nginx:80 时安全；3200 端口只绑 127.0.0.1，
-      # 无直连入口，X-Real-IP 不会被伪造）。不设此项则全站合并为 nginx 容器 IP 一个限流桶，高峰期假性 429。
+      # 信任 nginx 注入的 X-Real-IP；app 不发布宿主机端口，公网入口必须经过可信 nginx。
+      # 不设此项则全站合并为 nginx 容器 IP 一个限流桶，高峰期假性 429。
       RATE_LIMIT_TRUST_PROXY: "true"
       MQ_ENABLED: ${MQ_ENABLED:-true}
       MQ_LISTENER_AUTO_STARTUP: "true"
@@ -128,9 +131,9 @@ services:
       # 地图 Key（可选）
       AMAP_WEB_KEY: ${AMAP_WEB_KEY:-}
       BAIDU_MAP_AK: ${BAIDU_MAP_AK:-}
-    ports:
-      # 仅内网可达，公网统一走 nginx:80（接口本身有 JWT 鉴权）
-      - "127.0.0.1:3200:3200"
+    # 通过 nginx 访问，避免同机多个 app 实例争用宿主机 3200 端口。
+    expose:
+      - "3200"
     volumes:
       # 用户上传文件持久化到宿主机（nginx 容器同目录只读挂载，直接静态服务 /uploads/**）
       - ./uploads:/app/uploads
@@ -151,6 +154,7 @@ services:
     restart: unless-stopped
 
 volumes:
+  agent-data:
   mysql-data:
   redis-data:
   rabbitmq-data:

@@ -264,7 +264,16 @@ class TravelAgentPlanner:
         yield AgentEvent(
             event_type="phase_end", phase="research",
             message=f"✅ 调研完成：已获取 {destination} {len(research_data.get('spots', []))} 个热门景点、{len(research_data.get('foods', []))} 种特色美食",
-            data={"research_summary": research_data.get("summary", ""), "source": "built-in"},
+            data={
+                "research_summary": research_data.get("summary", ""),
+                "source": "built-in",
+                "spots": [
+                    {"name": s.get("name", ""), "desc": (s.get("desc") or "")[:40]}
+                    for s in research_data.get("spots", [])[:8]
+                ],
+                "spot_count": len(research_data.get("spots", [])),
+                "food_count": len(research_data.get("foods", [])),
+            },
         )
 
         # ===== Phase 2: PLAN =====
@@ -296,7 +305,7 @@ class TravelAgentPlanner:
             bd.get("transport", 0), bd.get("accommodation", 0),
             bd.get("food", 0), bd.get("tickets", 0), bd.get("shopping", 0),
         ]))
-        budget_total = budget * people
+        budget_total = self.req.get("total_budget") or budget * people
         budget_ok = actual_total <= budget_total
         budget_gap = actual_total - budget_total if not budget_ok else 0
 
@@ -345,7 +354,7 @@ class TravelAgentPlanner:
 
             # 调整后重新核算预算，据实给出结果文案（不再无条件声称已达标）
             adj_total = plan["budget_detail"]["total"]
-            adj_ok = adj_total <= budget * people
+            adj_ok = adj_total <= budget_total
             self.plan_data = plan
             if adj_ok:
                 yield AgentEvent(
@@ -562,6 +571,8 @@ class TravelAgentPlanner:
         from .memory import memory_store
         user_id = str(self.req.get("user_id") or "")
         session_id = str(self.req.get("session_id") or "")
+        # session_id 来自客户端，必须与服务端验证的用户绑定后才能读写记忆。
+        session_id = json.dumps([user_id, session_id]) if user_id and session_id else ""
         memory_block = ""
         perception_msg = (
             f"🧠 感知输入：{self.req.get('destination', '')} "
@@ -809,7 +820,7 @@ class TravelAgentPlanner:
         """评审智能体：独立审查行程质量，返回 {passed, score, issues}"""
         from .prompts import REVIEWER_SYSTEM
         people = self.req.get("people", 2)
-        budget_total = _to_int(budget) * people
+        budget_total = self.req.get("total_budget") or budget * people
         prompt = f"""{REVIEWER_SYSTEM}
 
 预算上限：{budget_total}（全队总费用）
@@ -969,6 +980,8 @@ class TravelAgentPlanner:
 <用户需求>
 - 目的地：{destination} | 出发地：{origin} | {days}天 | {people}人 | 人均{budget}元
 - 人群：{companion if companion else '无特殊要求'}
+- 人数构成：成人{req.get('adults') if req.get('adults') is not None else '未指定'}、儿童{req.get('children') if req.get('children') is not None else '未指定'}、老人{req.get('seniors') if req.get('seniors') is not None else '未指定'}；有儿童或老人时优先安排适合的步行距离、休息和活动，不假设必有优惠票。
+- 全队预算上限：{req.get('total_budget') or budget * people}元，全部费用合计不得超过上限。
 - 偏好：{', '.join(styles_clean) if styles_clean else '综合体验'}
 - 酒店：{hotel_level} | 节奏：{pace}
 - 出行月份：{months_text if months_text else '不限'}
@@ -1055,7 +1068,7 @@ class TravelAgentPlanner:
         # 直接按五项分项求和，保证预算校验权威、无法被低报 total 绕过
         actual_total = transport + accommodation + food + tickets + shopping
 
-        budget_total = budget * people
+        budget_total = self.req.get("total_budget") or budget * people
         budget_ok = actual_total <= budget_total
         budget_gap = actual_total - budget_total if not budget_ok else 0
 
@@ -1170,8 +1183,8 @@ class TravelAgentPlanner:
         # 确保顶层字段
         plan.setdefault("destination", destination)
         plan.setdefault("days", days)
-        plan.setdefault("people", people)
-        plan.setdefault("total_budget", budget * people)
+        plan["people"] = people
+        plan["total_budget"] = self.req.get("total_budget") or budget * people
         plan.setdefault("overview", f"{destination}{days}天深度游行程，涵盖必去景点与特色体验。")
 
         # 确保 day_plans 结构完整

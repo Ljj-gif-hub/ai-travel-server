@@ -1,5 +1,5 @@
-import { getToken, setToken, getRefreshToken, setRefreshToken, removeRefreshToken } from '../utils/auth';
-import { clearSession } from '../utils/userAccountStorage';
+import { getToken, setToken, getRefreshToken, setRefreshToken, removeToken, removeRefreshToken } from '../utils/auth';
+import { clearSession, getCurrentUser } from '../utils/userAccountStorage';
 import { useTripStore } from '../stores/trip';
 
 const BASE_URL = import.meta.env.VITE_API_BASE || '/api';
@@ -14,7 +14,7 @@ const DEDUP_TTL = 200;
 const AUTH_EXEMPT_URLS = ['/auth/login', '/auth/register', '/auth/social-login', '/auth/refresh'];
 
 const inflight = new Map();
-let refreshPromise = null; // 401 单飞刷新：并发 401 共享同一个 refresh promise
+const refreshPromises = new Map(); // 仅同一刷新令牌的并发 401 共享请求
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const isAbortError = (e) => e?.name === 'AbortError';
@@ -22,18 +22,38 @@ const isTimeoutError = (e) => !!e?.timeout;
 // fetch 网络层失败（断网/DNS/连接被拒）在浏览器中抛 TypeError
 const isNetworkError = (e) => e instanceof TypeError;
 
-/** 401 兜底：清会话 + hash 跳登录页（保留 redirectUrl 供登录后回跳） */
+/** 401 兜底：清会话；公开页留在原地当游客，勿再踢登录避免死循环 */
 function redirectToLogin() {
+  removeToken();
   removeRefreshToken();
-  // 【多账号隔离】仅清空会话缓存，保留账号持久化数据
   clearSession();
-  // BUGID ACCT 修复：被动登出（token 过期被踢回登录页）也清空行程 store，
-  // 否则换账号登录仍读到上一账号的行程数据
   useTripStore().resetState();
-  if (typeof window !== 'undefined' && !window.location.hash.includes('/login')) {
-    localStorage.setItem('redirectUrl', window.location.hash || '#/');
-    window.location.hash = '#/login';
-  }
+  if (typeof window === 'undefined') return;
+  const raw = (window.location.hash || '#/').replace(/^#/, '') || '/';
+  const path = raw.split('?')[0];
+  const stay =
+    path === '/' ||
+    path === '/login' ||
+    path === '/register' ||
+    path === '/community' ||
+    path === '/trips' ||
+    path === '/profile' ||
+    path === '/about' ||
+    path === '/settings' ||
+    path === '/planning' ||
+    path === '/destinations' ||
+    path === '/destination-detail' ||
+    path === '/attraction-search' ||
+    path === '/attraction-detail' ||
+    path === '/notes' ||
+    path === '/note-detail' ||
+    path === '/video-detail' ||
+    path === '/city-select' ||
+    path === '/attraction-select' ||
+    path.startsWith('/share/');
+  if (stay) return;
+  localStorage.setItem('redirectUrl', raw);
+  window.location.hash = '#/login';
 }
 
 /**
@@ -41,10 +61,10 @@ function redirectToLogin() {
  * 并发请求排队共享同一个 promise；返回 true = 刷新成功（新 token 已入库）。
  */
 function refreshAuthToken() {
-  if (!refreshPromise) {
-    refreshPromise = (async () => {
-      const rt = getRefreshToken();
-      if (!rt) return false;
+  const rt = getRefreshToken();
+  if (!rt) return Promise.resolve(false);
+  if (!refreshPromises.has(rt)) {
+    const promise = (async () => {
       try {
         const res = await fetch(`${BASE_URL}/auth/refresh`, {
           method: 'POST',
@@ -54,6 +74,7 @@ function refreshAuthToken() {
         if (res.status === 401) return false; // 刷新过期 → 需重新登录
         const data = await res.json().catch(() => null);
         if (data?.code === 0 && data.data?.token) {
+          if (getRefreshToken() !== rt) return false; // 旧账号的迟到刷新不能覆盖新会话
           setToken(data.data.token);
           if (data.data.refreshToken) setRefreshToken(data.data.refreshToken);
           return true;
@@ -62,9 +83,10 @@ function refreshAuthToken() {
       } catch {
         return false;
       }
-    })().finally(() => { refreshPromise = null; });
+    })().finally(() => { refreshPromises.delete(rt); });
+    refreshPromises.set(rt, promise);
   }
-  return refreshPromise;
+  return refreshPromises.get(rt);
 }
 
 /** 单次请求（含 Token 注入、超时控制、外部 signal 转发、HTTP 状态 → 错误映射） */
@@ -178,20 +200,29 @@ async function fetchOnce(url, options) {
 
 /** 带重试 + 401 刷新的请求主体 */
 async function doRequest(url, options, method) {
+  const account = getCurrentUser();
+  const checkAccount = () => {
+    if (getCurrentUser() !== account) throw new DOMException('登录账号已切换', 'AbortError');
+  };
   const maxAttempts = method === 'GET' ? 1 + MAX_GET_RETRIES : 1;
   let attempt = 0;
   let refreshedOnce = false; // 401 刷新后仅重放原请求一次
 
   for (;;) {
+    checkAccount();
     attempt += 1;
     try {
-      return await fetchOnce(url, options);
+      const result = await fetchOnce(url, options);
+      checkAccount();
+      return result;
     } catch (e) {
+      checkAccount();
       // 401 → 单飞刷新拿新 token 重试原请求一次；刷新失败/二次 401 → 清会话跳登录
       if (e?.status === 401) {
         if (!AUTH_EXEMPT_URLS.includes(url) && !refreshedOnce) {
           refreshedOnce = true;
           const ok = await refreshAuthToken();
+          checkAccount();
           if (ok) continue; // 刷新成功，用新 token 重放原请求
         }
         if (!AUTH_EXEMPT_URLS.includes(url)) redirectToLogin();
@@ -228,7 +259,7 @@ export const request = async (url, options = {}) => {
   // （带 signal 的请求无法安全共享取消，不参与）
   if (method === 'GET' && !options.signal) {
     const paramsKey = options.params !== undefined ? JSON.stringify(options.params) : '';
-    const key = `${method} ${url} ${paramsKey}`;
+    const key = `${getCurrentUser()} ${getToken() || ''} ${method} ${url} ${paramsKey}`;
     const now = Date.now();
     const hit = inflight.get(key);
     if (hit && hit.expires > now) return hit.promise;
@@ -249,6 +280,8 @@ export const request = async (url, options = {}) => {
 };
 
 export const userApi = {
+  getLevel: () => request('/user/level'),
+  checkIn: () => request('/user/check-in', { method: 'POST' }),
   getProfile: () => request('/user/profile'),
   updateProfile: (data) => request('/user/profile', { method: 'PUT', body: JSON.stringify(data) }),
   /** 附带 refreshToken 退出，后端一并撤销，退出后旧 refreshToken 彻底失效 */
@@ -284,9 +317,9 @@ export const couponApi = {
 };
 
 export const orderApi = {
-  getOrders: (type) => {
+  getOrders: (type, page = 0, size = 20) => {
     const url = type ? `/orders?type=${type}` : '/orders';
-    return request(url);
+    return request(url, { params: { page, size } });
   },
   createOrder: (data) => request('/orders', { method: 'POST', body: JSON.stringify(data) }),
   updateOrderStatus: (id, status) => request(`/orders/${id}/status`, {
@@ -329,7 +362,14 @@ export const flightApi = {
 
 export const noteApi = {
   /** 社区发现页：分页获取所有用户已发布的游记（options 可传 signal/timeout 等） */
-  getAllNotes: (page = 1, size = 10, options = {}) => request(`/notes?page=${page}&size=${size}`, options),
+  getAllNotes: (page = 1, size = 10, options = {}) => {
+    const { media, userId, q, ...rest } = options;
+    const params = {};
+    if (media) params.media = media;
+    if (userId != null) params.userId = userId;
+    if (q) params.q = q;
+    return request(`/notes?page=${page}&size=${size}`, Object.keys(params).length ? { ...rest, params } : rest);
+  },
   getMyNotes: (options = {}) => request('/notes/my', options),
   getNoteDetail: (id) => request(`/notes/${id}`),
   createNote: (data) => request('/notes', { method: 'POST', body: JSON.stringify(data) }),
@@ -340,7 +380,7 @@ export const noteApi = {
 };
 
 export const commentApi = {
-  getComments: (noteId) => request(`/notes/${noteId}/comments`),
+  getComments: (noteId, page = 0, size = 20) => request(`/notes/${noteId}/comments`, { params: { page, size } }),
   /** 获取某条评论的所有回复 */
   getReplies: (commentId) => request(`/comments/${commentId}/replies`),
   addComment: (noteId, content, image, video, parentId) => request(`/notes/${noteId}/comments`, {

@@ -67,7 +67,7 @@ public class PaymentController {
      * 支付渠道异步回调（公开，无需登录）
      */
     @PostMapping("/notify")
-    public Result<String> notify(@RequestBody Map<String, Object> body) {
+    public Result<String> notify(@RequestBody Map<String, Object> body, jakarta.servlet.http.HttpServletResponse response) {
         try {
             Map<String, String> params = new HashMap<>();
             body.forEach((k, v) -> params.put(k, v == null ? null : String.valueOf(v)));
@@ -75,9 +75,15 @@ public class PaymentController {
             return Result.ok("支付成功", orderNo);
         } catch (IllegalArgumentException e) {
             log.warn("支付回调处理失败：{}", e.getMessage());
+            response.setStatus(400);
             return Result.fail(e.getMessage());
+        } catch (IllegalStateException e) {
+            response.setStatus(409);
+            log.error("支付回调需要核对", e);
+            return Result.fail("订单与支付状态冲突，请核对支付结果");
         } catch (Exception e) {
             log.error("支付回调处理异常", e);
+            response.setStatus(503);
             return Result.fail("支付回调处理失败");
         }
     }

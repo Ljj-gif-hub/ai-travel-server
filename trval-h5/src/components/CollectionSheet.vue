@@ -92,8 +92,14 @@ const handleCreate = async () => {
       // 有笔记目标：创建后直接收藏该笔记
       if (props.noteId && created?.id) {
         try {
-          await collectionApi.addNote(created.id, Number(props.noteId))
-        } catch (e) { /* 收藏失败不阻断创建成功提示 */ }
+          const saved = await collectionApi.addNote(created.id, Number(props.noteId))
+          if (saved.code !== 0) throw new Error('save failed')
+        } catch {
+          showToast(t('collection.saveFailed'))
+          showCreateForm.value = false
+          await loadMine()
+          return
+        }
         showToast(t('collection.saved'))
       } else {
         showToast(t('collection.createSuccess'))

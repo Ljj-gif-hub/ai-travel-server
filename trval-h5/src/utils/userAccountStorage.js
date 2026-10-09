@@ -7,8 +7,7 @@
  * - 退出登录仅清空会话缓存，持久化数据完整保留
  *
  * 存储结构（localStorage）:
- *   TOKEN            → 当前登录账号的 JWT Token
- *   CURRENT_USER     → 当前登录账号的用户名
+ *   TOKEN / CURRENT_USER 存 sessionStorage，与标签页的登录会话一致。
  *   account:{user}   → 该账号的全部持久化数据（JSON 对象）:
  *     {
  *       userInfo: { ... },           // 用户基础信息
@@ -38,7 +37,17 @@ const CURRENT_USER_KEY = 'CURRENT_USER'
 /** 获取当前登录用户名 */
 export function getCurrentUser() {
   try {
-    return localStorage.getItem(CURRENT_USER_KEY) || ''
+    const current = sessionStorage.getItem(CURRENT_USER_KEY)
+    if (current) return current
+    // 老会话仅从本页 Token 的 sub 恢复账号，不相信其他标签页写入的全局用户名。
+    const token = sessionStorage.getItem('TOKEN') || localStorage.getItem('TOKEN')
+    if (!token) return ''
+    const payload = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')
+    const bytes = Uint8Array.from(atob(payload.padEnd(Math.ceil(payload.length / 4) * 4, '=')), c => c.charCodeAt(0))
+    const username = JSON.parse(new TextDecoder().decode(bytes)).sub
+    if (typeof username !== 'string' || !username) return ''
+    sessionStorage.setItem(CURRENT_USER_KEY, username)
+    return username
   } catch {
     return ''
   }
@@ -48,9 +57,9 @@ export function getCurrentUser() {
 export function setCurrentUser(username) {
   try {
     if (username) {
-      localStorage.setItem(CURRENT_USER_KEY, username)
+      sessionStorage.setItem(CURRENT_USER_KEY, username)
     } else {
-      localStorage.removeItem(CURRENT_USER_KEY)
+      sessionStorage.removeItem(CURRENT_USER_KEY)
     }
   } catch { /* quota */ }
 }
@@ -191,7 +200,10 @@ export function clearSession() {
     sessionStorage.removeItem('userInfo')
     // 清除临时页面缓存
     localStorage.removeItem('redirectUrl')
+    sessionStorage.removeItem('agent_session_id')
   } catch { /* noop */ }
+  // 清除旧版 SW 遗留的私有接口缓存；新版 API 使用 NetworkOnly。
+  if (typeof caches !== 'undefined') caches.delete('api-cache').catch(() => {})
 }
 
 /**

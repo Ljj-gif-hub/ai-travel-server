@@ -32,6 +32,24 @@ public interface NoteRepository extends JpaRepository<Note, Long> {
     /** 发现页分页（过滤 hidden） */
     Page<Note> findByStatusAndHiddenFalseOrderByCreatedAtDesc(String status, Pageable pageable);
 
+    /** 视频 Feed / 作者作品 / 标题搜索：可选 userId、只看视频、关键词 */
+    @Query("""
+        SELECT n FROM Note n WHERE n.status = :status AND n.hidden = false
+        AND (:userId IS NULL OR n.userId = :userId)
+        AND (:videoOnly = false OR LOWER(COALESCE(n.cover, '')) LIKE '%.mp4%'
+            OR LOWER(COALESCE(n.cover, '')) LIKE '%.webm%'
+            OR LOWER(COALESCE(n.cover, '')) LIKE '%.mov%'
+            OR LOWER(COALESCE(n.content, '')) LIKE '%<video%')
+        AND (:q = '' OR LOWER(COALESCE(n.title, '')) LIKE LOWER(CONCAT('%', :q, '%'))
+            OR LOWER(COALESCE(n.content, '')) LIKE LOWER(CONCAT('%', :q, '%')))
+        ORDER BY n.createdAt DESC
+        """)
+    Page<Note> searchPublished(@Param("status") String status,
+                               @Param("userId") Long userId,
+                               @Param("videoOnly") boolean videoOnly,
+                               @Param("q") String q,
+                               Pageable pageable);
+
     /** 原子自增浏览量，避免并发丢失更新 */
     @Modifying
     @Query("update Note n set n.views = n.views + 1 where n.id = :id")

@@ -11,6 +11,8 @@ import { agentPlanStream } from '../api/agent'
 import { planApi } from '../api/index.js'
 import { getToken } from '../utils/auth'
 import { spotCoord } from '../utils/spot-geocoder'
+import { MOCK_ATTRACTIONS } from '../data/attractions.js'
+import AgentPlanningProgress from '../components/AgentPlanningProgress.vue'
 // MAPFAIL-1 修复：AMap 不可用时回退 Leaflet（本地打包 + OSM 瓦片，离线由 SW 缓存）
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
@@ -21,7 +23,7 @@ const route = useRoute()
 const { t } = useI18n()
 
 const destCity = ref(route.query.destination || '')
-const originCity = ref(route.query.origin || t('map.departure'))
+const originCity = ref(route.query.origin || '深圳')
 const tripDays = ref(Number(route.query.days) || 3)
 const tripPeople = ref(Number(route.query.people) || 2)
 const phase = ref('generating')
@@ -49,16 +51,18 @@ async function savePlan() {
   if (isSaving.value || !planData.value) return
   isSaving.value = true
   try {
+    const totalBudget = planData.value.total_budget || Number(route.query.total_budget)
+      || (Number(route.query.budget) || 5000) * tripPeople.value
     const res = await planApi.savePlan({
       destination: destCity.value,
       days: tripDays.value,
-      budget: Number(route.query.budget) || 5000,
+      budget: Math.max(1, Math.round(totalBudget / tripPeople.value)),
       people: tripPeople.value,
       planData: {
         ...planData.value,
         hotels: hotelList.value,
         budgetDetail: costBreakdown.value,
-        totalBudget: Number(route.query.budget) || 5000,
+        totalBudget,
       },
       source: 'agent',
     })
@@ -75,14 +79,65 @@ async function savePlan() {
 }
 
 const stepList = ref([
-  { name: t('map.stepAnalyze'), status: 'wait' },
-  { name: t('map.stepPlan'), status: 'wait' },
-  { name: t('map.stepBudget'), status: 'wait' },
-  { name: t('map.stepOptimize'), status: 'wait' },
-  { name: t('map.stepGenerate'), status: 'wait' },
+  { name: t('map.stepAnalyze'), status: 'wait', summary: '' },
+  { name: t('map.stepPlan'), status: 'wait', summary: '' },
+  { name: t('map.stepBudget'), status: 'wait', summary: '' },
+  { name: t('map.stepOptimize'), status: 'wait', summary: '' },
+  { name: t('map.stepGenerate'), status: 'wait', summary: '' },
 ])
 const phaseIdx = { research: 0, plan: 1, verify: 2, adjust: 3, finalize: 4 }
 const agentLogs = ref([]) // 实时思考日志
+const genPhase = ref('research')
+const genPreview = ref({ spots: [], attractions: [], spotCount: 0, hotelCount: 0, dayCount: 0, tipCount: 0 })
+const cityImg = (n) => `/api/city/image?name=${encodeURIComponent(n || '')}`
+const genHighlights = computed(() => {
+  const dest = destCity.value || ''
+  const sse = (genPreview.value.spots || []).filter(s => s && s.name).map(s => ({
+    name: s.name, caption: s.desc || s.name, loc: dest, img: cityImg(s.name),
+  }))
+  if (sse.length) return sse.slice(0, 6)
+  const local = MOCK_ATTRACTIONS.filter(a => dest && (dest.includes(a.city) || a.city.includes(dest) || dest.includes(a.name)))
+  if (local.length) return local.slice(0, 6).map(a => ({
+    name: a.name, caption: a.listTitle || a.park, loc: a.park || a.city,
+    img: a.images?.[0]?.fallback || a.images?.[0]?.src || cityImg(a.name),
+  }))
+  if (!dest) return []
+  return [
+    { name: dest, caption: t('map.genHighlightScenic'), loc: dest, img: cityImg(dest) },
+    { name: t('map.genHighlightFood', { dest }), caption: t('map.genHighlightFoodCap'), loc: dest, img: cityImg(dest + '美食') },
+    { name: t('map.genHighlightNight', { dest }), caption: t('map.genHighlightNightCap'), loc: dest, img: cityImg(dest + '夜景') },
+    { name: t('map.genHighlightLocal', { dest }), caption: t('map.genHighlightLocalCap'), loc: dest, img: cityImg(dest + '风景') },
+  ]
+})
+const latestLog = computed(() => agentLogs.value[agentLogs.value.length - 1] || '')
+
+function summaryFor(phase, preview) {
+  if (phase === 'research') {
+    const n = preview.spotCount || preview.spots?.length || 0
+    return n ? t('map.foundSpots', { n }) : t('map.foundDestInfo')
+  }
+  if (phase === 'plan') {
+    const n = (preview.attractions || []).length
+    return n ? t('map.foundSpots', { n }) : t('map.foundDays', { n: preview.dayCount || tripDays.value })
+  }
+  if (phase === 'verify') {
+    return preview.hotelCount ? t('map.foundHotels', { n: preview.hotelCount }) : t('map.budgetChecked')
+  }
+  if (phase === 'adjust') return t('map.planOptimized')
+  return ''
+}
+
+let genRun = 0
+let genSeq = Promise.resolve()
+function enqueueGen(fn, dwell = 0) {
+  const run = genRun
+  genSeq = genSeq.then(async () => {
+    if (run !== genRun) return
+    fn()
+    if (dwell && run === genRun) await new Promise(r => setTimeout(r, dwell))
+  })
+  return genSeq
+}
 
 const totalCost = computed(() => {
   if (!planData.value) return 0
@@ -900,10 +955,10 @@ function getUserShortId() {
   } catch { return '' }
 }
 function getSessionId() {
-  let sid = localStorage.getItem('agent_session_id')
+  let sid = sessionStorage.getItem('agent_session_id')
   if (!sid) {
     sid = 'sess_' + Math.random().toString(36).slice(2) + Date.now().toString(36)
-    localStorage.setItem('agent_session_id', sid)
+    sessionStorage.setItem('agent_session_id', sid)
   }
   return sid
 }
@@ -966,14 +1021,23 @@ async function startGeneration(adjustment = '') {
   planData.value = null
   customTitle.value = '' // 新行程重置用户自定义标题
   const steps = stepList.value
-  steps.forEach(s => s.status = 'wait')
+  steps.forEach(s => { s.status = 'wait'; s.summary = '' })
   agentLogs.value = []
   agentProgress.value = 0
   agentStep.value = t('map.connectingAgent')
+  genPhase.value = 'research'
+  genPreview.value = { spots: [], attractions: [], spotCount: 0, hotelCount: 0, dayCount: 0, tipCount: 0 }
+  genRun += 1
+  genSeq = Promise.resolve()
+  snapTo(MAX)
 
   streamAbort = agentPlanStream({
     destination: destCity.value, origin: originCity.value, days: tripDays.value,
     budget: Number(route.query.budget) || 5000, people: tripPeople.value,
+    total_budget: Number(route.query.total_budget) > 0 ? Number(route.query.total_budget) : undefined,
+    adults: route.query.adults != null ? Number(route.query.adults) : undefined,
+    children: route.query.children != null ? Number(route.query.children) : undefined,
+    seniors: route.query.seniors != null ? Number(route.query.seniors) : undefined,
     companion: route.query.companion || '',
     styles: route.query.styles ? route.query.styles.split(',') : [],
     hotel_level: route.query.hotel_level || '舒适型', pace: route.query.pace || '适中',
@@ -986,28 +1050,51 @@ async function startGeneration(adjustment = '') {
   }, {
     onProgress(event) {
       const idx = phaseIdx[event.phase] ?? -1
-      const msg = event.message || ''
-      if (msg) {
-        agentLogs.value.push(msg)
-        if (agentLogs.value.length > 8) agentLogs.value.shift()
-      }
-      if (idx >= 0) {
-        steps.forEach((s, i) => { s.status = i < idx ? 'done' : i === idx ? 'doing' : 'wait' })
-        agentStep.value = steps[idx]?.name || ''
-        agentProgress.value = [10, 30, 55, 80, 95][idx] || agentProgress.value
-      }
-      if (event.event_type === 'phase_end' && idx >= 0) {
-        steps[idx].status = 'done'
-        agentProgress.value = [20, 45, 70, 95, 100][idx] || agentProgress.value
-      }
+      const dwell = event.event_type === 'phase_start' ? 1400 : 0
+      enqueueGen(() => {
+        const msg = event.message || ''
+        if (msg) {
+          agentLogs.value.push(msg)
+          if (agentLogs.value.length > 8) agentLogs.value.shift()
+        }
+        if (event.phase) genPhase.value = event.phase
+        const d = event.data || {}
+        if (Array.isArray(d.spots) && d.spots.length) genPreview.value.spots = d.spots
+        if (d.spot_count) genPreview.value.spotCount = d.spot_count
+        const p = d.plan_preview || d.adjusted_plan
+        if (p) {
+          genPreview.value.dayCount = p.day_count || genPreview.value.dayCount
+          genPreview.value.hotelCount = p.hotel_count || genPreview.value.hotelCount
+          genPreview.value.tipCount = p.tip_count || genPreview.value.tipCount
+          const names = (p.day_summaries || []).flatMap(x => x.attractions || []).filter(Boolean)
+          if (names.length) genPreview.value.attractions = names
+        }
+        if (idx < 0) return
+        if (event.phase === 'finalize' && steps[3].status === 'wait') {
+          steps[3].status = 'done'
+          steps[3].summary = t('map.noAdjustNeeded')
+        }
+        if (event.event_type === 'phase_end') {
+          steps.forEach((s, i) => { if (i < idx) s.status = 'done' })
+          steps[idx].status = 'done'
+          steps[idx].summary = summaryFor(event.phase, genPreview.value)
+          agentProgress.value = [22, 48, 68, 86, 96][idx] || agentProgress.value
+        } else {
+          steps.forEach((s, i) => { s.status = i < idx ? 'done' : i === idx ? 'doing' : (s.status === 'done' ? 'done' : 'wait') })
+          agentStep.value = steps[idx]?.name || msg
+          agentProgress.value = [12, 32, 54, 72, 90][idx] || agentProgress.value
+        }
+      }, dwell)
     },
     onComplete: async (event) => {
+      await enqueueGen(() => {}, 400)
+      if (!streamAbort) return
       const d = event.data || {}
       agentProgress.value = 100
-      steps.forEach(s => s.status = 'done')
+      steps.forEach(s => { s.status = 'done' })
       planData.value = {
         destination: d.destination || destCity.value, days: d.days || tripDays.value,
-        people: d.people || tripPeople.value, overview: d.overview || '',
+        people: d.people || tripPeople.value, overview: d.overview || '', total_budget: d.total_budget,
         dayPlans: (d.day_plans || []).map(dp => ({
           day: dp.day, dayTitle: dp.day_title || '',
           timeSlots: (dp.time_slots || []).map(s => ({
@@ -1028,7 +1115,7 @@ async function startGeneration(adjustment = '') {
       addMarkers(markerNames); loadImages(d.day_plans || []); fetchRealPrices(d.day_plans || [])
       phase.value = 'completed'; snapTo(MAX)
     },
-    onError(msg) { showToast(msg || t('map.planFailed')); goBackToPrev() },
+    onError(msg) { genRun += 1; streamAbort = null; showToast(msg || t('map.planFailed')); goBackToPrev() },
   })
 }
 
@@ -1136,14 +1223,14 @@ function destroyMap() {
   if (routeLine) { try { routeLine.setMap(null) } catch {} ; routeLine = null }
 }
 
-onBeforeUnmount(() => { if (streamAbort) streamAbort(); if (voiceReco) { try { voiceReco.abort() } catch {} } cancelMapZoom(); if (declutterTimer) clearTimeout(declutterTimer); destroyMap() })
+onBeforeUnmount(() => { genRun += 1; if (streamAbort) streamAbort(); if (voiceReco) { try { voiceReco.abort() } catch {} } cancelMapZoom(); if (declutterTimer) clearTimeout(declutterTimer); destroyMap() })
 /** 回退到上一个界面（无历史时兜底回 /trips，避免空白页） */
 function goBackToPrev() {
   if (window.history.length <= 1) router.replace('/trips')
   else router.back()
 }
 function goBack() { goBackToPrev() }
-function handleStop() { if (streamAbort) streamAbort(); goBackToPrev() }
+function handleStop() { genRun += 1; if (streamAbort) { streamAbort(); streamAbort = null } goBackToPrev() }
 </script>
 
 <template>
@@ -1217,36 +1304,17 @@ function handleStop() { if (streamAbort) streamAbort(); goBackToPrev() }
 
       <div class="body" ref="bodyEl" @scroll.passive="onBodyScroll" @touchmove.passive="releaseDayLock" @wheel.passive="releaseDayLock">
 
-        <!-- 携程同款生成动画 -->
+        <!-- 规划中：步骤清单 + 雷达/POI/贴士过程动画 -->
         <div v-if="phase==='generating'" class="gen">
-          <!-- 顶部状态条 -->
-          <div class="gen-status-bar">
-            <div class="gsb-left">
-              <span class="gsb-spinner"></span>
-              <span class="gsb-text">{{agentStep}}</span>
-            </div>
-            <span class="gsb-pct">{{agentProgress}}%</span>
-          </div>
-
-          <!-- 骨架卡片（携程同款 shimmer） -->
-          <div class="skeleton-list">
-            <div v-for="i in 3" :key="i" class="sk-card" :style="{animationDelay: (i-1)*0.15+'s'}">
-              <!-- 标题行骨架 -->
-              <div class="sk-row sk-title"></div>
-              <!-- 标签行 -->
-              <div class="sk-row sk-tags"><span></span><span></span></div>
-              <!-- 双图骨架 -->
-              <div class="sk-imgs"><div class="sk-img"></div><div class="sk-img"></div></div>
-              <!-- 文本行骨架 x3 -->
-              <div class="sk-row sk-text"></div>
-              <div class="sk-row sk-text short"></div>
-              <div class="sk-row sk-text shorter"></div>
-              <!-- 底部元信息 -->
-              <div class="sk-row sk-meta"></div>
-            </div>
-          </div>
-
-          <button class="stop-btn" @click="handleStop">{{ t('agent.stopGenerate') }}</button>
+          <AgentPlanningProgress
+            :progress="agentProgress"
+            :steps="stepList"
+            :destination="destCity"
+            :phase="genPhase"
+            :highlights="genHighlights"
+            :preview="genPreview"
+            :live-message="latestLog"
+          />
         </div>
 
         <!-- 旧版 markdown 保存行程兜底展示 -->
@@ -1410,15 +1478,18 @@ function handleStop() { if (streamAbort) streamAbort(); goBackToPrev() }
 
     <!-- 问AI栏：固定视口底部悬浮胶囊，抽屉展开时显示、收起态滑出（恢复"问AI/按住说话"可用） -->
     <transition name="ask-fade">
-      <div class="ask-bar" v-if="phase==='completed' && planData && !showMapOverlay">
+      <div class="ask-bar" v-if="!showMapOverlay && (phase==='generating' || (phase==='completed' && planData))">
         <div class="ask-inner">
-          <input v-model="adjustText" :placeholder="t('map.askAIHold')" @keyup.enter="submitAdjust" />
+          <input v-model="adjustText" :placeholder="t('map.askAIHold')" :disabled="phase==='generating'" @keyup.enter="submitAdjust" />
           <div class="ask-mic" :class="{ recording: voiceRecording }" :title="t('map.askAIHold')"
                @touchstart.prevent="voiceStart" @touchend.prevent="voiceStop" @touchcancel.prevent="voiceStop"
                @mousedown.prevent="voiceStart" @mouseup.prevent="voiceStop" @mouseleave.prevent="voiceStop">
             <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
           </div>
-          <div class="ask-fab" @click="submitAdjust" :title="t('map.askAIHold')">＋</div>
+          <div v-if="phase==='generating'" class="ask-fab" :title="t('agent.stopGenerate')" @click="handleStop">
+            <span class="ask-stop"></span>
+          </div>
+          <div v-else class="ask-fab" @click="submitAdjust" :title="t('map.askAIHold')">＋</div>
         </div>
       </div>
     </transition>
@@ -1557,45 +1628,13 @@ function handleStop() { if (streamAbort) streamAbort(); goBackToPrev() }
 .ask-mic.recording { animation:voicePulse 1.5s ease-in-out infinite; }
 .ask-fab { width:34px; height:34px; border-radius:50%; background:linear-gradient(135deg,#8b5cf6,#6366f1); color:#fff; font-size:19px; display:flex; align-items:center; justify-content:center; cursor:pointer; flex-shrink:0; transition:transform .2s; }
 .ask-fab:active { transform:scale(.92); }
+.ask-stop { width:12px; height:12px; border-radius:3px; background:#fff; }
 .ask-fade-enter-active, .ask-fade-leave-active { transition:opacity .3s ease, transform .3s ease; }
 .ask-fade-enter-from, .ask-fade-leave-to { opacity:0; transform:translateY(120%); }
 @keyframes voicePulse { 0%,100%{box-shadow:0 0 0 4px rgba(139,92,246,.15)} 50%{box-shadow:0 0 0 10px rgba(139,92,246,0)} }
 
-/* 生成动画 — 携程同款 Shimmer 骨架屏 */
+/* 生成动画（过程清单在 AgentPlanningProgress） */
 .gen { padding:0; }
-
-/* 顶部状态条 */
-.gen-status-bar { display:flex; align-items:center; justify-content:space-between; padding:14px 16px; background:#fff; border-radius:16px; margin-bottom:12px; }
-.gsb-left { display:flex; align-items:center; gap:10px; }
-.gsb-spinner { width:20px; height:20px; border:2.5px solid #e8e0f0; border-top-color:#8b5cf6; border-radius:50%; animation:spin .8s linear infinite; }
-@keyframes spin { to{transform:rotate(360deg)} }
-.gsb-text { font-size:14px; font-weight:500; color:#333; }
-.gsb-pct { font-size:18px; font-weight:700; color:#8b5cf6; }
-
-/* 骨架卡片 */
-.skeleton-list { display:flex; flex-direction:column; gap:10px; }
-.sk-card { background:#fff; border-radius:16px; padding:16px; animation:cardIn .4s ease-out both; }
-@keyframes cardIn { from{opacity:0;transform:translateY(14px) scale(.97)} to{opacity:1;transform:translateY(0) scale(1)} }
-
-/* Shimmer 动效 */
-.sk-row { height:14px; border-radius:7px; background:linear-gradient(90deg, #f0f0f5 25%, #e8e8f0 50%, #f0f0f5 75%); background-size:200% 100%; animation:shimmer 1.8s ease-in-out infinite; }
-@keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
-
-.sk-title { height:18px; width:55%; margin-bottom:10px; }
-.sk-tags { height:22px; width:35%; margin-bottom:12px; display:flex; gap:6px; background:none; animation:none; }
-.sk-tags span { flex:1; height:100%; border-radius:12px; background:linear-gradient(90deg, #f0f0f5 25%, #e8e8f0 50%, #f0f0f5 75%); background-size:200% 100%; animation:shimmer 1.8s ease-in-out infinite; }
-.sk-tags span:nth-child(2) { animation-delay:.2s; }
-
-.sk-imgs { display:flex; gap:8px; margin-bottom:12px; }
-.sk-img { flex:1; height:100px; border-radius:10px; background:linear-gradient(90deg, #f0f0f5 25%, #e8e8f0 50%, #f0f0f5 75%); background-size:200% 100%; animation:shimmer 1.8s ease-in-out infinite; }
-.sk-img:nth-child(2) { animation-delay:.15s; }
-
-.sk-text { margin-bottom:8px; }
-.sk-text.short { width:75%; }
-.sk-text.shorter { width:45%; }
-.sk-meta { width:60%; height:12px; margin-top:10px; }
-
-.stop-btn { display:block; margin:16px auto; padding:10px 40px; border:1px solid #e2e8f0; border-radius:22px; background:#fff; color:#94a3b8; font-size:13px; cursor:pointer; }
 
 /* 完成 */
 .done { padding:12px 0 12px; animation:fadeUp .45s ease-out both; }

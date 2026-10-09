@@ -4,18 +4,23 @@ Pydantic 数据模型 — 定义 Agent 输入/输出的结构化 Schema
 from __future__ import annotations
 
 from typing import Annotated, List, Optional, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 
 # ==================== 用户输入 ====================
 
 class TravelRequest(BaseModel):
     """用户旅行规划请求"""
-    destination: str = Field(..., max_length=50, description="目的地城市", examples=["成都"])
-    origin: str = Field(default="深圳", description="出发地", examples=["深圳"])
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    destination: str = Field(..., min_length=1, max_length=50, description="目的地城市", examples=["成都"])
+    origin: str = Field(default="深圳", min_length=1, max_length=50, description="出发地", examples=["深圳"])
     days: int = Field(default=3, ge=1, le=14, description="出行天数")
     people: int = Field(default=2, ge=1, le=20, description="出行人数")
-    budget: int = Field(default=5000, ge=1, description="人均预算（元）", examples=[5000])
+    budget: float = Field(default=5000, gt=0, le=100000000, allow_inf_nan=False, description="人均预算（元）", examples=[5000])
+    total_budget: Optional[int] = Field(default=None, ge=1, le=100000000, description="全队预算；填写后优先于人均预算")
+    adults: Optional[int] = Field(default=None, ge=0, le=20)
+    children: Optional[int] = Field(default=None, ge=0, le=20)
+    seniors: Optional[int] = Field(default=None, ge=0, le=20)
     companion: str = Field(default="独行", description="同行人群", examples=["情侣", "亲子", "朋友", "独行"])
     styles: List[str] = Field(default_factory=list, max_length=20, description="旅行偏好标签", examples=[["美食", "人文", "自然风光"]])
     hotel_level: str = Field(default="舒适型", description="酒店档次", examples=["经济型", "舒适型", "豪华型"])
@@ -26,9 +31,23 @@ class TravelRequest(BaseModel):
     cabin: str = Field(default="", description="航班舱位偏好（如经济舱/商务舱）")
     # ---- 记忆层标识（可选）：用于长期用户偏好 + 短期会话上下文 ----
     user_id: Optional[str] = Field(default=None, description="用户ID（长期记忆键）")
-    session_id: Optional[str] = Field(default=None, description="会话ID（短期记忆键）")
+    session_id: Optional[str] = Field(default=None, max_length=128, description="会话ID（短期记忆键）")
     # ---- 行程调整（可选）：如「放慢节奏」「多安排美食」「预算压缩到3000」----
-    adjustment: Optional[str] = Field(default=None, description="用户对行程的调整需求")
+    adjustment: Optional[str] = Field(default=None, max_length=800, description="用户对行程的调整需求")
+
+    @model_validator(mode="after")
+    def validate_party_and_budget(self):
+        groups = (self.adults, self.children, self.seniors)
+        if any(value is not None for value in groups):
+            count = sum(value or 0 for value in groups)
+            if not 1 <= count <= 20:
+                raise ValueError("出行总人数必须在 1 到 20 人之间")
+            if "people" in self.model_fields_set and self.people != count:
+                raise ValueError("成人、儿童、老人数量之和必须等于出行人数")
+            self.people = count
+        if self.total_budget is not None:
+            self.budget = self.total_budget / self.people
+        return self
 
     def build_preference_text(self) -> str:
         """构建人类可读的偏好描述"""
@@ -45,18 +64,8 @@ class TravelRequest(BaseModel):
         return "，".join(parts)
 
 
-class RawPlanRequest(BaseModel):
-    """原始 SSE 端点（/api/agent/plan/stream-sse）的请求模型（S2）
-
-    兼容网关透传的最小字段集，带字段级约束：
-    destination 1-50 字、days 1-14（默认 3）、budget > 0 可选。
-    """
-    destination: str = Field(..., min_length=1, max_length=50, description="目的地城市")
-    days: int = Field(default=3, ge=1, le=14, description="出行天数")
-    budget: Optional[float] = Field(default=None, gt=0, description="人均预算（元），可选")
-    styles: Optional[List[str]] = Field(default=None, description="旅行偏好标签，可选")
-    companion: Optional[str] = Field(default=None, description="同行人群，可选")
-    user_id: Optional[str] = Field(default=None, description="用户ID（服务端以验证结果覆盖）")
+# 三个规划端点共享同一契约，避免流式端点悄悄丢弃偏好字段。
+RawPlanRequest = TravelRequest
 
 
 class PlanExportRequest(BaseModel):

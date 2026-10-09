@@ -29,6 +29,7 @@ export default {
   // 预算弹窗
   perPersonBudget: '人均预算',
   totalBudget: '总预算',
+  budgetPriorityHint: '填写总预算后，以全队总预算为准，并按人数换算人均预算。',
   budgetTitle: '预算',
   unitWan: '万',
   budgetPerPerson: '{amount}元/人',
@@ -47,6 +48,7 @@ export default {
   manualCreate: '手动创建线路',
   // 人数弹窗
   travelerCount: '旅行人数',
+  travelerLimit: '出行总人数须为 1–20 人',
   elderly: '老人',
   elderlyRange: '60岁及以上',
   adult: '成人',

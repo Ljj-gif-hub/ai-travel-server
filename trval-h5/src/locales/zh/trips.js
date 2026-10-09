@@ -22,6 +22,7 @@ export default {
   routePlanning: '线路规划',
   myRoutes: '我的线路',
   routeDetail: '线路详情',
+  noRating: '暂无评分',
   agentSlogan: '自主搜索 · 实时校验 · 自动优化',
   loadingMap: '加载地图中...',
   nearbyMap: '周边游地图',
@@ -116,5 +117,6 @@ export default {
   // ===== MyRoutesView（我的线路） =====
   routesAll: '全部线路',
   createRoute: '新建线路',
+  addTrip: '添加行程',
   autoSaved: '{date} 自动保存',
 }

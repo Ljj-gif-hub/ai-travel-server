@@ -2,6 +2,8 @@
  * Orders (en) — sub-agent E
  */
 export default {
+  loadMore: 'Load more orders',
+  noMore: 'All orders loaded',
   title: 'Orders',
   all: 'All',
   flight: 'Flight',

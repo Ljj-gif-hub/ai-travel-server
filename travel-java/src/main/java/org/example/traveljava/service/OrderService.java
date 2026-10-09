@@ -102,7 +102,7 @@ public class OrderService {
      * 支付回调标记已支付（幂等、并发安全）— 公开回调路径，不校验属主（由支付渠道验签保证真实性）
      * pending→paid 用单条原子 UPDATE 完成，避免「读→判→写」在并发回调下双重支付；
      * 受影响行数为 1 时本请求才是唯一生效者，才发布 ORDER_PAID 事件（事件在事务提交后发布，消除双写）。
-     * 受影响行数为 0 表示已被并发请求标记或非 pending 状态，视为已处理（幂等返回）。
+     * 只有已支付/已完成才能幂等返回；已取消订单收到付款不能报告成功，必须核对退款。
      */
     @Transactional
     public void markOrderPaid(String orderNo) {
@@ -112,8 +112,14 @@ public class OrderService {
         int updated = orderRepository.markPaidIfPending(orderNo, LocalDateTime.now(),
                 order.getPayChannel() == null ? "mock" : order.getPayChannel());
         if (updated != 1) {
-            log.info("订单已支付（幂等忽略）：orderNo={}", orderNo);
-            return;
+            // 锁定读取最新状态，避免 REPEATABLE READ 事务仍读到旧快照。
+            Order current = orderRepository.findByIdForUpdate(order.getId()).orElseThrow();
+            if ("paid".equals(current.getStatus()) || "completed".equals(current.getStatus())) {
+                log.info("订单已支付（幂等忽略）：orderNo={}", orderNo);
+                return;
+            }
+            log.error("PAYMENT_RECONCILIATION_REQUIRED orderNo={}, status={}", orderNo, current.getStatus());
+            throw new IllegalStateException("订单状态与支付结果冲突，需核对支付并处理退款");
         }
         log.info("订单支付成功：orderNo={}", orderNo);
 
@@ -294,8 +300,9 @@ public class OrderService {
             throw new IllegalArgumentException("当前订单状态不可取消");
         }
 
-        order.setStatus("cancelled");
-        orderRepository.save(order);
+        if (orderRepository.cancelIfPending(orderId, userId) != 1) {
+            throw new IllegalArgumentException("订单状态已变更，请刷新；已支付订单请申请退款");
+        }
         // 释放优惠券，供再次使用
         couponService.releaseByOrder(order.getId());
         log.info("取消订单：orderId={}", orderId);

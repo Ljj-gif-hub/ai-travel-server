@@ -8,11 +8,16 @@ import org.example.traveljava.repository.UserRepository;
 import org.example.traveljava.service.NoteService;
 import org.example.traveljava.util.AuthUtils;
 import org.example.traveljava.util.JwtUtil;
+import org.example.traveljava.util.NoteShareHtml;
 import org.example.traveljava.vo.Result;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+
+import jakarta.servlet.http.HttpServletRequest;
 
 import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
@@ -52,14 +57,18 @@ public class NoteController {
     public Result<Map<String, Object>> getAllNotes(
             @RequestHeader(value = "Authorization", required = false) String authHeader,
             @RequestParam(defaultValue = "1") int page,
-            @RequestParam(defaultValue = "10") int size) {
+            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(required = false) String media,
+            @RequestParam(required = false) Long userId,
+            @RequestParam(required = false) String q) {
         try {
             final Long currentUserId = resolveOptionalUserId(authHeader);
             if (page < 1) page = 1;
             if (size < 1) size = 10;
             if (size > 50) size = 50;
 
-            Page<Note> notesPage = noteService.getAllPublishedNotes(page, size);
+            Page<Note> notesPage = noteService.searchPublished(
+                    page, size, userId, "video".equalsIgnoreCase(media), q);
             List<Note> notes = notesPage.getContent();
             long total = notesPage.getTotalElements();
 
@@ -111,6 +120,23 @@ public class NoteController {
         } catch (Exception e) {
             log.error("获取游记列表失败", e);
             return Result.fail("获取游记列表失败");
+        }
+    }
+
+    /** 分享落地页：爬虫读 og 标签，浏览器跳回视频页。无需登录。 */
+    @GetMapping(value = "/{id}/card", produces = MediaType.TEXT_HTML_VALUE)
+    public ResponseEntity<String> shareCard(@PathVariable Long id, HttpServletRequest req) {
+        try {
+            Note note = noteService.getNoteById(id);
+            if (!"published".equals(note.getStatus())) {
+                return ResponseEntity.status(404).contentType(MediaType.TEXT_HTML)
+                        .body("<!doctype html><title>not found</title>");
+            }
+            return ResponseEntity.ok().contentType(MediaType.TEXT_HTML)
+                    .body(NoteShareHtml.render(note, NoteShareHtml.origin(req)));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(404).contentType(MediaType.TEXT_HTML)
+                    .body("<!doctype html><title>not found</title>");
         }
     }
 

@@ -530,7 +530,7 @@ import {
   NavBar, Button, Icon, Tag, Field, Loading, Popup, showToast, showLoadingToast, showSuccessToast, closeToast
 } from 'vant'
 import MarkdownIt from 'markdown-it'
-import hljs from 'highlight.js'
+import hljs from 'highlight.js/lib/common'
 import 'highlight.js/styles/github.css'
 import { planApi, sceneApi, chatApi } from '../api'
 import { getToken } from '../utils/auth'
@@ -1355,7 +1355,7 @@ onUnmounted(() => {
   max-width: 100vw;
   min-height: 100vh;
   background: transparent;
-  overflow-x: hidden;
+  overflow-x: clip;
 }
 
 .page-container {
@@ -1364,7 +1364,7 @@ onUnmounted(() => {
   margin: 0 auto;
   box-sizing: border-box;
   padding: 0 16px;
-  overflow-x: hidden;
+  overflow-x: clip;
 }
 
 .page-navbar {

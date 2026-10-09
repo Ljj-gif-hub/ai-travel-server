@@ -2,6 +2,7 @@ package org.example.traveljava.controller;
 
 import org.example.traveljava.entity.User;
 import org.example.traveljava.service.UserService;
+import org.example.traveljava.service.ProfileStatsService;
 import org.example.traveljava.util.AuthUtils;
 import org.example.traveljava.util.JwtUtil;
 import org.example.traveljava.vo.Result;
@@ -21,10 +22,12 @@ public class UserController {
 
     private final UserService userService;
     private final JwtUtil jwtUtil;
+    private final ProfileStatsService profileStatsService;
 
-    public UserController(UserService userService, JwtUtil jwtUtil) {
+    public UserController(UserService userService, JwtUtil jwtUtil, ProfileStatsService profileStatsService) {
         this.userService = userService;
         this.jwtUtil = jwtUtil;
+        this.profileStatsService = profileStatsService;
     }
 
     @GetMapping("/profile")
@@ -42,7 +45,7 @@ public class UserController {
             profile.put("bio", user.getBio());
             profile.put("phone", user.getPhone());
             profile.put("email", user.getEmail());
-            profile.put("level", user.getLevel());
+            profile.put("level", UserService.levelOf(user.getPoints()));
             profile.put("points", user.getPoints());
             profile.put("following", user.getFollowingCount());
             profile.put("followers", user.getFollowersCount());
@@ -51,6 +54,7 @@ public class UserController {
             profile.put("totalDays", user.getTotalDays());
             profile.put("totalSpent", user.getTotalSpent());
             profile.put("totalPhotos", user.getTotalPhotos());
+            profile.putAll(profileStatsService.getStats(user.getId()));
 
             return Result.ok(profile);
         } catch (AuthUtils.AuthException e) {
@@ -78,7 +82,7 @@ public class UserController {
             profile.put("bio", updatedUser.getBio());
             profile.put("phone", updatedUser.getPhone());
             profile.put("email", updatedUser.getEmail());
-            profile.put("level", updatedUser.getLevel());
+            profile.put("level", UserService.levelOf(updatedUser.getPoints()));
             profile.put("points", updatedUser.getPoints());
             profile.put("following", updatedUser.getFollowingCount());
             profile.put("followers", updatedUser.getFollowersCount());
@@ -87,6 +91,7 @@ public class UserController {
             profile.put("totalDays", updatedUser.getTotalDays());
             profile.put("totalSpent", updatedUser.getTotalSpent());
             profile.put("totalPhotos", updatedUser.getTotalPhotos());
+            profile.putAll(profileStatsService.getStats(updatedUser.getId()));
 
             return Result.ok(profile);
         } catch (AuthUtils.AuthException e) {
@@ -128,5 +133,11 @@ public class UserController {
             log.error("获取用户等级失败", e);
             return Result.fail("获取等级失败");
         }
+    }
+
+    @PostMapping("/check-in")
+    public Result<Map<String, Object>> checkIn(@RequestHeader("Authorization") String authHeader) {
+        Long userId = AuthUtils.requireUserId(authHeader, jwtUtil);
+        return Result.ok(userService.checkIn(userId));
     }
 }

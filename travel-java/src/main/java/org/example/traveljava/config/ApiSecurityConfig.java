@@ -1,21 +1,22 @@
 package org.example.traveljava.config;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.example.traveljava.vo.Result;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
 
+import java.nio.charset.StandardCharsets;
+
 /**
- * 【修复】引入 spring-boot-starter-security 后的兜底安全配置。
- *
- * 当前策略：全站 permitAll + 关闭 CSRF（API 无表单/Cookie 会话，无 CSRF 面）。
- * 与引入 Security 前的行为完全一致：鉴权仍由现有 JwtUtil/AuthUtils 的
- * HMAC 签名校验 + RateLimitInterceptor 等拦截器承担，Security 仅作为
- * 框架级防线兜底（如异常防护、安全头、未来方法级鉴权底座）。
- *
- * 迁移路线：待各控制器统一走 AuthUtils 后，可将 permitAll 按路径/方法
- * 逐步收敛为显式访问规则，并迁移到 @PreAuthorize 方法级鉴权。
+ * API 安全边界：公开接口显式放行，其余接口默认要求有效 JWT。
+ * 控制器中的用户归属和管理员校验继续作为业务级纵深防御。
  *
  * 【新功能-安全头】在 Security 链上统一追加：
  *  - X-Content-Type-Options: nosniff
@@ -28,10 +29,46 @@ import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWrite
 public class ApiSecurityConfig {
 
     @Bean
-    public SecurityFilterChain apiSecurityFilterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain apiSecurityFilterChain(HttpSecurity http,
+                                                      JwtAuthenticationFilter jwtAuthenticationFilter,
+                                                      ObjectMapper objectMapper) throws Exception {
         http
                 .csrf(csrf -> csrf.disable())
-                .authorizeHttpRequests(auth -> auth.anyRequest().permitAll())
+                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .requestCache(cache -> cache.disable())
+                .authorizeHttpRequests(auth -> auth
+                        .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+                        .requestMatchers("/error", "/api/auth/**", "/api/payment/notify").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/cost/breakdown").permitAll()
+                        .requestMatchers(HttpMethod.GET,
+                                "/actuator/health",
+                                "/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**",
+                                "/api/agent/health", "/api/travel/hello", "/api/travel/health",
+                                "/api/voice/health", "/api/weather/**", "/api/cost/estimate",
+                                "/api/city/**", "/api/map/**", "/api/proxy/image",
+                                "/api/files/**", "/api/scene/**", "/api/recommend/**",
+                                "/api/flight/search", "/api/hotel/**",
+                                "/api/posts", "/api/notes", "/api/notes/*/card",
+                                "/api/notes/*/comments", "/api/comments/*/replies",
+                                "/api/collection/public", "/api/collection/*",
+                                "/api/share/*", "/api/trip/share/*",
+                                "/api/template/market", "/api/template/*")
+                        .permitAll()
+                        .anyRequest().authenticated())
+                .exceptionHandling(errors -> errors
+                        .authenticationEntryPoint((request, response, exception) -> {
+                            response.setStatus(401);
+                            response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+                            response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+                            objectMapper.writeValue(response.getWriter(), Result.fail("请先登录"));
+                        })
+                        .accessDeniedHandler((request, response, exception) -> {
+                            response.setStatus(403);
+                            response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+                            response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+                            objectMapper.writeValue(response.getWriter(), Result.fail("无权限执行该操作"));
+                        }))
+                .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
                 .httpBasic(basic -> basic.disable())
                 .formLogin(form -> form.disable())
                 .logout(logout -> logout.disable())

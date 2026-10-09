@@ -3,7 +3,7 @@ import { ref, reactive } from 'vue';
 import { useRouter } from 'vue-router';
 import { showToast, showLoadingToast, closeToast, RadioGroup, Radio } from 'vant';
 import { getToken } from '../utils/auth';
-import { feedbackApi } from '../api';
+import { feedbackApi, uploadApi } from '../api';
 import { useI18n } from 'vue-i18n';
 
 const router = useRouter();
@@ -30,14 +30,31 @@ const feedbackTypes = [
 ];
 
 const maxImages = 3;
+const fileInput = ref(null);
+const uploading = ref(false);
 
 const addImage = () => {
   if (feedbackForm.images.length >= maxImages) {
     showToast(t('feedback.maxImages', { n: maxImages }));
     return;
   }
-  const mockImage = `/images/default-placeholder.png`;
-  feedbackForm.images.push(mockImage);
+  if (!uploading.value) fileInput.value.click();
+};
+
+const uploadImage = async (event) => {
+  const file = event.target.files?.[0];
+  event.target.value = '';
+  if (!file || uploading.value || feedbackForm.images.length >= maxImages) return;
+  if (!/^image\/(jpeg|png|webp|gif)$/.test(file.type) || file.size > 5 * 1024 * 1024) {
+    showToast(t('profile.avatarLimit')); return;
+  }
+  uploading.value = true;
+  try {
+    const res = await uploadApi.uploadFile(file);
+    if (res?.code !== 0 || !res.data?.url) throw new Error();
+    feedbackForm.images.push(res.data.url);
+  } catch { showToast(t('profile.uploadFailed')); }
+  finally { uploading.value = false; }
 };
 
 const removeImage = (index) => {
@@ -45,6 +62,7 @@ const removeImage = (index) => {
 };
 
 const submitFeedback = async () => {
+  if (isLoading.value || uploading.value) return;
   if (!feedbackForm.type) {
     showToast(t('feedback.needType'));
     return;
@@ -103,6 +121,7 @@ const submitFeedback = async () => {
     />
 
     <div class="page-content">
+      <input ref="fileInput" type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden @change="uploadImage" />
       <van-cell-group inset class="form-group">
         <van-cell :title="t('feedback.type')">
           <template #right-icon>
@@ -156,7 +175,8 @@ const submitFeedback = async () => {
                 class="image-add"
                 @click="addImage"
               >
-                <van-icon name="plus" size="30" color="#ccc" />
+                <van-loading v-if="uploading" />
+                <van-icon v-else name="plus" size="30" color="#ccc" />
               </div>
             </div>
           </template>

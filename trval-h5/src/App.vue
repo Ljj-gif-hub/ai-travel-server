@@ -140,7 +140,7 @@ const CACHED_VIEWS = ['HomeView', 'CommunityView', 'TripsView', 'ProfileView']
       </main>
 
       <!-- 底部悬浮椭圆 Tab 导航 -->
-      <div class="custom-tabbar" :class="{ 'tab-hidden': hideTabBar }">
+      <div class="custom-tabbar" :class="{ 'tab-hidden': hideTabBar }" :aria-hidden="hideTabBar">
         <div
           v-show="isTabActive"
           class="tab-indicator"
@@ -295,7 +295,7 @@ html[data-theme='dark'] .van-dialog {
   width: 100%;
   min-height: 100vh;
   position: relative;
-  overflow-x: hidden;
+  overflow-x: clip;
   background: transparent;
   -webkit-font-smoothing: antialiased;
 }
@@ -365,7 +365,7 @@ html[data-theme='dark'] .van-dialog {
   justify-content: center;
   width: 48px;
   height: 34px;
-  color: #999;
+  color: #64748B;
   transition: color 0.25s ease;
   cursor: pointer;
   position: relative;
@@ -377,11 +377,10 @@ html[data-theme='dark'] .van-dialog {
 .tab-item:active { transform: scale(0.88); }
 
 .tab-text {
-  font-size: 8px;
+  font-size: 10px;
   margin-top: 1px;
   font-weight: 500;
   line-height: 1;
-  transform: scaleX(0.88);
 }
 
 .tab-icon {

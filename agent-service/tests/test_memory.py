@@ -30,19 +30,29 @@ def test_atomic_write_and_reload(tmp_path):
     assert reloaded.get_session("s1")["destination"] == "成都"
 
 
-def test_dirty_skip_rewrite(tmp_path):
+def test_dirty_skip_rewrite(tmp_path, monkeypatch):
     path = tmp_path / "agent_memory.json"
     store = MemoryStore(path=str(path))
     store.set_user("u1", {"preference_text": "A"})
     mtime1 = path.stat().st_mtime_ns
+    writes = []
+    import agent.memory as memory
+    replace = memory.os.replace
+    def tracked_replace(source, target):
+        writes.append(target)
+        return replace(source, target)
+    monkeypatch.setattr(memory.os, "replace", tracked_replace)
 
     # 相同数据再次写入：dirty 检测应跳过磁盘写（mtime 不变）
     store.set_user("u1", {"preference_text": "A"})
     assert path.stat().st_mtime_ns == mtime1
+    assert writes == []
 
     # 数据实际变化时才落盘
     store.set_user("u1", {"preference_text": "B"})
-    assert path.stat().st_mtime_ns != mtime1
+    # Windows 两次快速写入可能具有相同 mtime，检查实际替换和落盘内容。
+    assert len(writes) == 1
+    assert '"B"' in path.read_text(encoding="utf-8")
     assert MemoryStore(path=str(path)).get_user("u1")["preference_text"] == "B"
 
 

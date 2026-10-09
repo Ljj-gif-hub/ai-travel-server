@@ -17,6 +17,8 @@ import java.util.Optional;
 
 @Repository
 public interface OrderRepository extends JpaRepository<Order, Long> {
+    @Query("select coalesce(sum(o.price), 0) from Order o where o.userId = :userId and o.status in ('paid', 'completed')")
+    long sumPaidTotal(@Param("userId") Long userId);
     Optional<Order> findByOrderNo(String orderNo);
 
     /**
@@ -51,6 +53,11 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     @Query("update Order o set o.status = 'cancelled' where o.id = :id and o.status = 'paid'")
     int cancelIfPaid(@Param("id") Long id);
 
+    /** 与支付回调竞争时只有一个状态转移可以成功。 */
+    @Modifying(clearAutomatically = true)
+    @Query("update Order o set o.status = 'cancelled' where o.id = :id and o.userId = :userId and o.status = 'pending'")
+    int cancelIfPending(@Param("id") Long id, @Param("userId") Long userId);
+
     /**
      * 【并发安全】悲观锁查询订单，序列化同一订单的并发退款申请（REFUND-2① 修复）。
      */
@@ -58,13 +65,19 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     @Query("select o from Order o where o.id = :id")
     Optional<Order> findByIdForUpdate(@Param("id") Long id);
 
+    /** 回调首次读取即加锁，金额校验不得使用锁前加载的实体快照。 */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select o from Order o where o.orderNo = :orderNo")
+    Optional<Order> findByOrderNoForUpdate(@Param("orderNo") String orderNo);
+
     /**
      * 【并发安全】原子应用优惠券：仅当订单仍为 pending 时更新 price/couponId/couponValue。
      * 避免与支付回调并发时全字段 merge 把已支付订单打回 pending（COUPON-1 修复）。
      */
     @Modifying(clearAutomatically = true)
     @Query("update Order o set o.price = o.price - :discount, o.couponId = :couponId, o.couponValue = :couponValue " +
-            "where o.id = :orderId and o.status = 'pending'")
+            "where o.id = :orderId and o.status = 'pending' and o.couponId is null " +
+            "and o.payTradeNo is null and :discount >= 0 and o.price >= :discount")
     int applyCouponIfPending(@Param("orderId") Long orderId, @Param("discount") long discount,
                              @Param("couponId") Long couponId, @Param("couponValue") int couponValue);
 

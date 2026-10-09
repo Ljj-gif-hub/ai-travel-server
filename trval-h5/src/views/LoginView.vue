@@ -3,7 +3,7 @@
  * LoginView.vue — 智能旅游助手 登录/注册 合并页
  *
  * 设计规范：
- *   品牌主色: #7b42f5 (紫)  辅助色: #22c59c (青绿)
+ *   品牌主色: #7b42f5 (紫)
  *   圆角: 输入框12px / 卡片18px / 按钮14px
  *   字号: 标题24px / 正文15px / 辅助12px
  */
@@ -11,12 +11,12 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { showToast, showLoadingToast, closeToast, showDialog } from 'vant'
-import { setToken, setRefreshToken } from '../utils/auth'
+import { setToken, setRefreshToken, removeToken, removeRefreshToken } from '../utils/auth'
 import { authApi } from '../api'
 import { useTripStore } from '../stores/trip'
 import {
   setCurrentUser, initAccountData, accountExists,
-  getAccountData, setAccountData,
+  getAccountData, setAccountData, clearSession,
 } from '../utils/userAccountStorage'
 
 const router = useRouter()
@@ -24,15 +24,22 @@ const route = useRoute()
 const { t } = useI18n()
 const tripStore = useTripStore()
 
+const authScroll = ref(null)
 const activeTab = ref(route.meta?.initialTab === 'register' ? 'register' : 'login')
-const switchTab = (tab) => { activeTab.value = tab }
+const switchTab = (tab, event) => {
+  event?.currentTarget?.blur()
+  activeTab.value = tab
+  requestAnimationFrame(() => requestAnimationFrame(() => authScroll.value?.scrollTo({ top: 0 })))
+}
 const isLogin = computed(() => activeTab.value === 'login')
 
 const showLoginPwd = ref(false)
 const showRegPwd = ref(false)
 const showRegConfirmPwd = ref(false)
+const loginMethod = ref('password')
 
 const loginForm = reactive({ username: '', password: '' })
+const smsForm = reactive({ phone: '', code: '' })
 const loginErrors = reactive({ username: '', password: '' })
 const loginLoading = ref(false)
 
@@ -88,6 +95,26 @@ const canRegister = computed(() => registerForm.username.trim() && isPhoneValid.
 
 const clearLoginError = (field) => { loginErrors[field] = '' }
 const clearRegisterError = (field) => { registerErrors[field] = '' }
+
+const requestSmsCode = () => {
+  if (!/^1[3-9]\d{9}$/.test(smsForm.phone.trim())) {
+    showToast({ message: t('auth.enterValidPhone'), position: 'middle' })
+    return
+  }
+  showToast({ message: t('auth.smsNotConfigured'), position: 'middle' })
+}
+
+const handleSmsLogin = () => {
+  if (!/^1[3-9]\d{9}$/.test(smsForm.phone.trim())) {
+    showToast({ message: t('auth.enterValidPhone'), position: 'middle' })
+    return
+  }
+  if (!smsForm.code.trim()) {
+    showToast({ message: t('auth.enterSmsCode'), position: 'middle' })
+    return
+  }
+  showToast({ message: t('auth.smsNotConfigured'), position: 'middle' })
+}
 
 const handleLogin = async () => {
   if (!validateLogin()) return
@@ -146,6 +173,11 @@ const OAUTH_CONFIG = {
     redirectUri: encodeURIComponent(window.location.origin + '/login'),
     authUrl: 'https://openauth.alipay.com/oauth2/publicAppAuthorize.htm',
   },
+  qq: {
+    appid: '',
+    redirectUri: encodeURIComponent(window.location.origin + '/login'),
+    authUrl: 'https://graph.qq.com/oauth2.0/authorize',
+  },
 }
 
 /** 生成 OAuth 防 CSRF state：crypto 强随机（32 位 hex），替代可预测的 Math.random */
@@ -179,6 +211,13 @@ const handleThirdPartyLogin = async (platform) => {
       localStorage.setItem('oauth_state', state)
       localStorage.setItem('oauth_platform', 'alipay')
       const url = `${cfg.authUrl}?app_id=${cfg.appid}&redirect_uri=${cfg.redirectUri}&scope=auth_user&state=${state}`
+      window.location.href = url
+    }
+    else if (key === 'qq') {
+      const state = generateOAuthState()
+      localStorage.setItem('oauth_state', state)
+      localStorage.setItem('oauth_platform', 'qq')
+      const url = `${cfg.authUrl}?response_type=code&client_id=${cfg.appid}&redirect_uri=${cfg.redirectUri}&state=${state}&scope=get_user_info`
       window.location.href = url
     }
   } catch (e) {
@@ -238,7 +277,15 @@ const handleOAuthCallback = async () => {
   }
 }
 
-const goBack = () => { try { const u = localStorage.getItem('redirectUrl'); if (u) router.push(u); else router.push('/') } catch { router.push('/') } }
+const leaveAsGuest = () => {
+  removeToken()
+  removeRefreshToken()
+  clearSession()
+  localStorage.removeItem('redirectUrl')
+  sessionStorage.removeItem('selected_destination_spot')
+  location.replace(`${location.pathname}${location.search}#/`)
+}
+const goBack = leaveAsGuest
 
 const handleForgetPassword = () => {
   showDialog({ title: t('auth.forgotPasswordTitle'), message: t('auth.forgotPasswordMessage'), confirmButtonText: t('auth.gotIt'), confirmButtonColor: '#7b42f5' }).catch(() => {})
@@ -264,30 +311,8 @@ onMounted(() => {
     </button>
 
     <!-- 滚动区 -->
-    <div class="auth-scroll">
-      <div class="auth-inner">
-
-        <!-- 品牌区 -->
-        <div class="brand-section" :class="{ in: pageReady }">
-          <div class="logo-ring">
-            <svg viewBox="0 0 44 48" width="34" height="38" fill="none">
-              <rect x="8" y="14" width="28" height="30" rx="5" stroke="white" stroke-width="2" fill="rgba(255,255,255,0.12)"/>
-              <path d="M14 14 V8 A4 4 0 0 1 18 4 H26 A4 4 0 0 1 30 8 V14" stroke="white" stroke-width="2" fill="none"/>
-              <rect x="18" y="22" width="8" height="10" rx="2" fill="rgba(255,255,255,0.25)"/>
-              <line x1="22" y1="8" x2="22" y2="14" stroke="white" stroke-width="1.8"/>
-            </svg>
-          </div>
-          <h1 class="app-title">{{ t('app.name') }}</h1>
-          <p class="app-tagline">{{ t('home.bannerSubtitle') }}</p>
-          <p class="app-slogan">{{ t('app.slogan') }}</p>
-        </div>
-
-        <!-- Tab -->
-        <div class="tab-bar" :class="{ in: pageReady }">
-          <div class="tab-slider" :style="{ left: isLogin ? '4px' : 'calc(50% + 2px)', width: 'calc(50% - 6px)' }" />
-          <button :class="['tab-item', { active: isLogin }]" @click="switchTab('login')">{{ t('common.login') }}</button>
-          <button :class="['tab-item', { active: !isLogin }]" @click="switchTab('register')">{{ t('common.register') }}</button>
-        </div>
+    <div ref="authScroll" class="auth-scroll">
+      <div class="auth-inner" :class="{ register: !isLogin }">
 
         <!-- 表单卡片 -->
         <div class="form-card" :class="{ in: pageReady }">
@@ -295,28 +320,39 @@ onMounted(() => {
           <!-- 登录 -->
           <Transition name="form-switch">
           <div v-if="isLogin" class="form-body" key="login">
-            <div class="input-group" :class="{ err: loginErrors.username }">
-              <svg class="input-ico" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="7" r="3.5"/><path d="M3 18 Q3 12 10 12 Q17 12 17 18" stroke-linecap="round"/></svg>
-              <input v-model="loginForm.username" type="text" :placeholder="t('auth.username')" class="form-input" @focus="clearLoginError('username')" @input="clearLoginError('username')"/>
-            </div>
-            <div class="input-group" :class="{ err: loginErrors.password }">
-              <svg class="input-ico" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="7" width="12" height="10" rx="2.5"/><path d="M7 7 V5 A3 3 0 0 1 13 5 V7"/><circle cx="10" cy="12.5" r="1"/></svg>
-              <input v-model="loginForm.password" :type="showLoginPwd ? 'text' : 'password'" :placeholder="t('auth.password')" class="form-input" @focus="clearLoginError('password')" @input="clearLoginError('password')"/>
-              <button class="pwd-btn" @click="showLoginPwd = !showLoginPwd" type="button">
-                <svg v-if="!showLoginPwd" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="10" cy="10" r="3"/><path d="M2 10 S5 5 10 5 S18 10 18 10 S15 15 10 15 S2 10 2 10"/></svg>
-                <svg v-else viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="3" y1="3" x2="17" y2="17"/><path d="M7 7 Q5 9 4 10 Q7 15 10 15 Q13 15 15 12"/><circle cx="10" cy="10" r="2"/></svg>
-              </button>
-            </div>
-            <div class="forgot-row">
+            <template v-if="loginMethod === 'password'">
+              <div class="input-group" :class="{ err: loginErrors.username }">
+                <input v-model="loginForm.username" type="text" autocomplete="username" :placeholder="t('auth.username')" class="form-input" @focus="clearLoginError('username')" @input="clearLoginError('username')"/>
+              </div>
+              <div class="input-group" :class="{ err: loginErrors.password }">
+                <input v-model="loginForm.password" :type="showLoginPwd ? 'text' : 'password'" autocomplete="current-password" :placeholder="t('auth.password')" class="form-input" @focus="clearLoginError('password')" @input="clearLoginError('password')"/>
+                <button class="pwd-btn" @click="showLoginPwd = !showLoginPwd" type="button">
+                  <svg v-if="!showLoginPwd" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="10" cy="10" r="3"/><path d="M2 10 S5 5 10 5 S18 10 18 10 S15 15 10 15 S2 10 2 10"/></svg>
+                  <svg v-else viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="3" y1="3" x2="17" y2="17"/><path d="M7 7 Q5 9 4 10 Q7 15 10 15 Q13 15 15 12"/><circle cx="10" cy="10" r="2"/></svg>
+                </button>
+              </div>
+            </template>
+            <template v-else>
+              <div class="input-group">
+                <input v-model="smsForm.phone" type="tel" inputmode="numeric" maxlength="11" autocomplete="tel" :placeholder="t('auth.phone')" class="form-input"/>
+              </div>
+              <div class="input-group">
+                <input v-model="smsForm.code" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code" :placeholder="t('auth.smsCode')" class="form-input"/>
+                <button type="button" class="sms-code-btn" @click="requestSmsCode">{{ t('auth.sendCode') }}</button>
+              </div>
+            </template>
+            <div v-if="loginMethod === 'password'" class="forgot-row">
               <span class="forgot-link" @click="handleForgetPassword">{{ t('auth.forgotPassword') }}</span>
             </div>
-            <button class="submit-btn login-btn" :disabled="loginLoading" @click="handleLogin">
-              <template v-if="!loginLoading">
-                <svg viewBox="0 0 18 18" width="16" height="16" fill="currentColor"><path d="M2 9 L7 4 L7 7 Q13 7 16 10 L14 7 Q11 4 7 4 L7 1 Z" transform="rotate(-45 9 9)"/></svg>
-                <span>{{ t('auth.loginNow') }}</span>
-              </template>
+            <button class="submit-btn login-btn" :disabled="loginLoading" @click="loginMethod === 'password' ? handleLogin() : handleSmsLogin()">
+              <span v-if="!loginLoading">{{ loginMethod === 'password' ? t('auth.loginNow') : t('auth.smsLogin') }}</span>
               <svg v-else width="20" height="20" viewBox="0 0 24 24" fill="none" class="spin"><circle cx="12" cy="12" r="10" stroke="rgba(255,255,255,.3)" stroke-width="3"/><path d="M12 2 A10 10 0 0 1 22 12" stroke="white" stroke-width="3" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.8s" repeatCount="indefinite"/></path></svg>
             </button>
+            <div class="secondary-actions">
+              <button type="button" class="secondary-action" @click="loginMethod = loginMethod === 'password' ? 'sms' : 'password'">{{ loginMethod === 'password' ? t('auth.smsLogin') : t('auth.passwordLogin') }}</button>
+              <span class="secondary-dot" aria-hidden="true">·</span>
+              <button type="button" class="secondary-action" @click="switchTab('register', $event)">{{ t('auth.registerAccount') }}</button>
+            </div>
           </div>
           </Transition>
 
@@ -324,15 +360,12 @@ onMounted(() => {
           <Transition name="form-switch">
           <div v-if="!isLogin" class="form-body" key="register">
             <div class="input-group" :class="{ err: registerErrors.username }">
-              <svg class="input-ico" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="7" r="3.5"/><path d="M3 18 Q3 12 10 12 Q17 12 17 18" stroke-linecap="round"/></svg>
               <input v-model="registerForm.username" type="text" :placeholder="t('auth.username')" class="form-input" @focus="clearRegisterError('username')" @input="clearRegisterError('username')"/>
             </div>
             <div class="input-group" :class="{ err: registerErrors.phone }">
-              <svg class="input-ico" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="1" width="10" height="18" rx="2.5"/><line x1="8" y1="15" x2="12" y2="15" stroke-linecap="round"/></svg>
               <input v-model="registerForm.phone" type="tel" maxlength="11" :placeholder="t('auth.phone')" class="form-input" @focus="clearRegisterError('phone')" @input="clearRegisterError('phone')"/>
             </div>
             <div class="input-group" :class="{ err: registerErrors.password }">
-              <svg class="input-ico" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="7" width="12" height="10" rx="2.5"/><path d="M7 7 V5 A3 3 0 0 1 13 5 V7"/><circle cx="10" cy="12.5" r="1"/></svg>
               <input v-model="registerForm.password" :type="showRegPwd ? 'text' : 'password'" :placeholder="t('auth.passwordMinLength')" class="form-input" @focus="clearRegisterError('password')" @input="clearRegisterError('password')"/>
               <button class="pwd-btn" @click="showRegPwd = !showRegPwd" type="button">
                 <svg v-if="!showRegPwd" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="10" cy="10" r="3"/><path d="M2 10 S5 5 10 5 S18 10 18 10 S15 15 10 15 S2 10 2 10"/></svg>
@@ -340,7 +373,6 @@ onMounted(() => {
               </button>
             </div>
             <div class="input-group" :class="{ err: registerErrors.confirmPassword }">
-              <svg class="input-ico" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="7" width="12" height="10" rx="2.5"/><path d="M7 7 V5 A3 3 0 0 1 13 5 V7"/><circle cx="10" cy="12.5" r="1"/></svg>
               <input v-model="registerForm.confirmPassword" :type="showRegConfirmPwd ? 'text' : 'password'" :placeholder="t('auth.confirmPassword')" class="form-input" @focus="clearRegisterError('confirmPassword')" @input="clearRegisterError('confirmPassword')"/>
               <button class="pwd-btn" @click="showRegConfirmPwd = !showRegConfirmPwd" type="button">
                 <svg v-if="!showRegConfirmPwd" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="10" cy="10" r="3"/><path d="M2 10 S5 5 10 5 S18 10 18 10 S15 15 10 15 S2 10 2 10"/></svg>
@@ -350,43 +382,31 @@ onMounted(() => {
             <div class="terms-row">
               <button class="terms-check" @click="agreeTerms = !agreeTerms" type="button">
                 <svg v-if="agreeTerms" viewBox="0 0 18 18" width="18" height="18"><circle cx="9" cy="9" r="8.5" fill="#7b42f5"/><polyline points="5 9.5 8 12 13 6" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                <svg v-else viewBox="0 0 18 18" width="18" height="18"><circle cx="9" cy="9" r="8" fill="none" stroke="rgba(0,0,0,.2)" stroke-width="1.5"/></svg>
+                <svg v-else viewBox="0 0 18 18" width="18" height="18"><circle cx="9" cy="9" r="8" fill="none" stroke="rgba(255,255,255,.78)" stroke-width="1.5"/></svg>
               </button>
               <span class="terms-label">{{ t('auth.termsLabelPrefix') }}<span class="terms-link" @click.stop="openTerms('userAgreement')">{{ t('auth.userAgreement') }}</span>{{ t('auth.termsLabelAnd') }}<span class="terms-link" @click.stop="openTerms('privacyPolicy')">{{ t('auth.privacyPolicy') }}</span></span>
             </div>
             <button class="submit-btn reg-btn" :class="{ off: !canRegister }" :disabled="!canRegister || registerLoading" @click="handleRegister">
-              <template v-if="!registerLoading">
-                <svg viewBox="0 0 44 48" width="16" height="18" fill="none"><rect x="8" y="14" width="28" height="30" rx="5" stroke="currentColor" stroke-width="2.2"/><path d="M14 14 V8 A4 4 0 0 1 18 4 H26 A4 4 0 0 1 30 8 V14" stroke="currentColor" stroke-width="2.2" fill="none"/></svg>
-                <span>{{ t('common.register') }}</span>
-              </template>
+              <span v-if="!registerLoading">{{ t('common.register') }}</span>
               <svg v-else width="20" height="20" viewBox="0 0 24 24" fill="none" class="spin"><circle cx="12" cy="12" r="10" stroke="rgba(255,255,255,.3)" stroke-width="3"/><path d="M12 2 A10 10 0 0 1 22 12" stroke="white" stroke-width="3" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.8s" repeatCount="indefinite"/></path></svg>
             </button>
-          </div>
-          </Transition>
-
-          <!-- 第三方登录 -->
-          <div class="third-party">
-            <div class="divider"><span class="divider-line"></span><span class="divider-text">{{ t('auth.otherLogin') }}</span><span class="divider-line"></span></div>
-            <div class="social-row">
-              <button class="social-btn" @click="handleThirdPartyLogin('wechat')" :title="t('auth.wechat')">
-                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#4b5563" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M15.5 8.5a5.5 5.5 0 0 1 0 11c-.8 0-1.6-.2-2.3-.5L9 20.5l.5-3.5A5.5 5.5 0 1 1 15.5 8.5z"/>
-                  <circle cx="12.5" cy="14" r=".8" fill="#4b5563" stroke="none"/>
-                  <circle cx="16.5" cy="14" r=".8" fill="#4b5563" stroke="none"/>
-                </svg>
-              </button>
-              <button class="social-btn" @click="handleThirdPartyLogin('alipay')" :title="t('auth.alipay')">
-                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#4b5563" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M16 4l-1 4h3l-6 8 1-6H9l7-6z"/>
-                </svg>
-              </button>
+            <div class="secondary-actions">
+              <button type="button" class="secondary-action" @click="switchTab('login', $event)">{{ t('common.login') }}</button>
             </div>
           </div>
+          </Transition>
         </div>
-
-        <!-- 版权 -->
-        <p class="footer-text" :class="{ in: pageReady }">©2026 {{ t('app.name') }} · {{ t('app.footerSlogan') }}</p>
       </div>
+    </div>
+
+    <div class="social-login" aria-label="快捷登录">
+      <button class="social-icon wechat" @click="handleThirdPartyLogin('wechat')" :aria-label="t('auth.wechat')" :title="t('auth.wechat')">
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 8.5a5.5 5.5 0 0 1 0 11c-.8 0-1.6-.2-2.3-.5L9 20.5l.5-3.5A5.5 5.5 0 1 1 15.5 8.5z"/><circle cx="12.5" cy="14" r=".8" fill="currentColor" stroke="none"/><circle cx="16.5" cy="14" r=".8" fill="currentColor" stroke="none"/></svg>
+      </button>
+      <button class="social-icon qq" @click="handleThirdPartyLogin('qq')" :aria-label="t('auth.qq')" :title="t('auth.qq')">
+        <span>QQ</span>
+      </button>
+      <button class="social-icon alipay" @click="handleThirdPartyLogin('alipay')" :aria-label="t('auth.alipay')" :title="t('auth.alipay')"><span>支</span></button>
     </div>
 
     <!-- 协议弹窗 -->
@@ -409,7 +429,7 @@ onMounted(() => {
 /*
  * ================================================================
  * 设计规范
- *   主色: #7b42f5 (紫)  辅助: #22c59c (青绿)
+ *   主色: #7b42f5 (紫)
  *   圆角: 输入框12px / 卡片18px / 按钮14px
  *   间距: 模块24px / 输入框16px / 内边距14px
  *   最大宽: 420px 自动居中
@@ -430,83 +450,42 @@ onMounted(() => {
 }
 .bg-overlay {
   position: absolute; inset: 0;
-  background: linear-gradient(180deg, rgba(255,255,255,0.25) 0%, rgba(255,255,255,0.06) 40%, rgba(255,255,255,0.02) 70%, rgba(255,255,255,0.12) 100%);
+  background:
+    linear-gradient(180deg, rgba(21,31,68,.22) 0%, rgba(30,42,85,.08) 34%, rgba(18,26,55,.2) 100%),
+    radial-gradient(circle at 50% 14%, rgba(255,255,255,.22), transparent 34%);
 }
 
 /* ──── 返回 ──── */
 .back-btn {
   position: absolute; z-index: 10;
   top: max(44px, env(safe-area-inset-top, 12px)); left: 16px;
-  width: 36px; height: 36px; border-radius: 50%;
-  background: rgba(255,255,255,0.18); backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,.3);
+  width: 36px; height: 36px;
+  background: transparent; border: 0;
   color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center;
   transition: background 0.2s, color 0.2s, transform 0.2s;
 }
-.back-btn:active { transform: scale(0.9); background: rgba(255,255,255,.3); }
+.back-btn:active { transform: translateX(-2px); }
 
 /* ──── 滚动区 ──── */
 .auth-scroll {
   position: relative; z-index: 2; flex: 1;
   overflow-y: auto; -webkit-overflow-scrolling: touch;
-  padding: 0 20px 32px;
+  padding: 0 20px 24px;
 }
 .auth-inner {
   display: flex; flex-direction: column; align-items: center;
-  padding-top: max(60px, calc(env(safe-area-inset-top, 12px) + 50px));
-  padding-bottom: 40px;
+  padding-top: max(224px, 27vh);
+  padding-bottom: 80px;
 }
-
-/* ──── 品牌 ──── */
-.brand-section { text-align: center; margin-bottom: 24px; opacity: 0; transform: translateY(12px); transition: opacity .5s ease, transform .5s ease; }
-.brand-section.in { opacity: 1; transform: translateY(0); }
-.logo-ring {
-  width: 64px; height: 64px; border-radius: 50%;
-  background: rgba(255,255,255,0.15); backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,.35);
-  display: flex; align-items: center; justify-content: center;
-  margin: 0 auto 16px;
-}
-.app-title { font-size: 28px; font-weight: 800; color: #fff; margin: 0 0 6px; text-shadow: 0 2px 12px rgba(0,0,0,.3); }
-.app-tagline { font-size: 14px; color: rgba(255,255,255,.9); margin: 0 0 6px; text-shadow: 0 1px 8px rgba(0,0,0,.2); }
-.app-slogan { font-size: 11px; color: rgba(255,255,255,.65); margin: 0; }
-
-/* ──── Tab — 滑动指示器 ──── */
-.tab-bar {
-  display: flex; width: 100%; max-width: 420px; margin-bottom: 24px;
-  background: rgba(255,255,255,0.12); backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px); border-radius: 14px; padding: 4px;
-  border: 1px solid rgba(255,255,255,.2);
-  position: relative;
-  opacity: 0; transform: translateY(12px); transition: opacity .5s ease .1s, transform .5s ease .1s;
-}
-.tab-bar.in { opacity: 1; transform: translateY(0); }
-.tab-slider {
-  position: absolute; top: 4px; height: calc(100% - 8px);
-  background: #fff; border-radius: 11px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-  transition: left 0.35s cubic-bezier(0.4, 0, 0.2, 1), width 0.35s cubic-bezier(0.4, 0, 0.2, 1);
-  z-index: 0;
-}
-.tab-item {
-  flex: 1; padding: 10px 0; border: none; border-radius: 11px;
-  font-size: 15px; font-weight: 500; cursor: pointer;
-  background: transparent; color: rgba(255,255,255,.6);
-  position: relative; z-index: 1;
-  transition: color 0.3s ease;
-}
-.tab-item.active { color: #7b42f5; font-weight: 600; }
-.tab-item:active { transform: scale(.96); }
+.auth-inner.register { padding-top: max(128px, 15vh); }
 
 /* ──── 表单卡片（淡紫磨砂玻璃） ──── */
 .form-card {
   width: 100%; max-width: 420px;
-  background: rgba(123,66,245,0.06); backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border-radius: 18px; padding: 24px 20px 20px; position: relative; overflow: hidden;
-  border: 1px solid rgba(123,66,245,0.18);
-  box-shadow: 0 8px 32px rgba(123,66,245,0.06), 0 2px 8px rgba(0,0,0,.04);
-  opacity: 0; transform: translateY(12px); transition: opacity .5s ease .2s, transform .5s ease .2s;
+  background: transparent; backdrop-filter: none; -webkit-backdrop-filter: none;
+  border-radius: 0; padding: 4px 2px 0; position: relative; overflow: hidden;
+  border: 0; box-shadow: none;
+  opacity: 0; transform: translateY(12px); transition: opacity .5s ease .1s, transform .5s ease .1s;
 }
 .form-card.in { opacity: 1; transform: translateY(0); }
 .form-body { display: flex; flex-direction: column; gap: 14px; }
@@ -520,77 +499,76 @@ onMounted(() => {
 /* ──── 输入框 ──── */
 .input-group {
   display: flex; align-items: center;
-  background: rgba(255,255,255,.9); border-radius: 12px;
-  padding: 0 14px; height: 50px;
-  border: 1px solid rgba(0,0,0,.06);
-  transition: border-color .25s, box-shadow .25s;
+  background: transparent; padding: 0 4px; height: 46px;
+  border: 0; border-bottom: 1px solid rgba(255,255,255,.58);
+  transition: border-color .25s;
 }
-.input-group:focus-within { border-color: #7b42f5; box-shadow: 0 0 0 3px rgba(123,66,245,.15); }
-.input-group.err { border-color: #ef4444; }
-.input-ico { flex-shrink: 0; margin-right: 10px; color: rgba(0,0,0,.3); transition: color .25s; }
-.input-group:focus-within .input-ico { color: #7b42f5; }
+.input-group:focus-within { border-bottom-color: #fff; }
+.input-group.err { border-bottom-color: #fca5a5; }
 .form-input {
   flex: 1; min-width: 0; height: 100%; border: none; outline: none;
-  background: transparent; font-size: 15px; color: #1e293b;
+  background: transparent; font-size: 15px; color: #fff; text-shadow: 0 1px 4px rgba(15,23,42,.25);
 }
-.form-input::placeholder { color: rgba(0,0,0,.28); font-size: 14px; }
+.form-input::placeholder { color: rgba(255,255,255,.74); font-size: 14px; }
+.form-input:-webkit-autofill,
+.form-input:-webkit-autofill:hover,
+.form-input:-webkit-autofill:focus,
+.form-input:-webkit-autofill:active {
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: #fff !important;
+  caret-color: #fff;
+  transition: background-color 9999s ease-out 0s;
+}
 .pwd-btn {
   flex-shrink: 0; width: 36px; height: 36px; border: none; background: transparent;
-  color: rgba(0,0,0,.25); cursor: pointer; border-radius: 50%;
+  color: rgba(255,255,255,.72); cursor: pointer; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
   transition: opacity .2s, transform .2s; margin-left: 2px;
 }
 .pwd-btn:active { background: rgba(123,66,245,.08); color: #7b42f5; transform: scale(.88); }
+.sms-code-btn { flex-shrink: 0; border: 0; background: transparent; color: #fff; font-size: 13px; font-weight: 600; padding: 8px 0 8px 12px; text-shadow: 0 1px 5px rgba(15,23,42,.4); }
 
 /* ──── 忘记密码 ──── */
 .forgot-row { display: flex; justify-content: flex-end; margin-top: -4px; }
-.forgot-link { font-size: 13px; color: #7b42f5; cursor: pointer; padding: 4px 8px; font-weight: 500; }
+.forgot-link { font-size: 13px; color: #fff; cursor: pointer; padding: 4px 2px; font-weight: 600; text-shadow: 0 1px 6px rgba(15,23,42,.45); }
 
 /* ──── 提交按钮 ──── */
 .submit-btn {
-  width: 100%; height: 52px; border: none; border-radius: 14px;
-  color: #fff; font-size: 17px; font-weight: 700; cursor: pointer;
+  width: 100%; height: 48px; border: 1px solid rgba(255,255,255,.48); border-radius: 12px;
+  color: #fff; font-size: 16px; font-weight: 600; cursor: pointer;
   display: flex; align-items: center; justify-content: center; gap: 8px;
-  transition: opacity .25s ease, transform .25s ease;
+  transition: background .25s ease, transform .25s ease;
   margin-top: 4px;
 }
 .submit-btn:active { transform: scale(.96); }
 .submit-btn:disabled { opacity: .5; pointer-events: none; }
-.login-btn { background: #22c59c; box-shadow: 0 6px 20px rgba(34,197,156,.35); }
-.login-btn:active { background: #1a9f7e; transform: scale(.965); box-shadow: 0 2px 8px rgba(34,197,156,.25); }
-.reg-btn { background: #7b42f5; box-shadow: 0 6px 20px rgba(123,66,245,.35); }
-.reg-btn:active:not(.off) { background: #6935d6; transform: scale(.965); box-shadow: 0 2px 8px rgba(123,66,245,.25); }
-.reg-btn.off { background: rgba(0,0,0,.06); color: rgba(0,0,0,.2); box-shadow: none; }
+.login-btn, .reg-btn { background: rgba(15,23,42,.24); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); box-shadow: none; }
+.secondary-actions { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 0; }
+.secondary-action { border: 0; background: transparent; color: rgba(255,255,255,.86); font-size: 13px; padding: 5px 4px; text-shadow: 0 1px 5px rgba(15,23,42,.4); }
+.secondary-dot { color: rgba(255,255,255,.55); }
+.login-btn:active, .reg-btn:active:not(.off) { background: rgba(15,23,42,.38); transform: scale(.965); }
+.reg-btn.off { opacity: 1; background: rgba(15,23,42,.14); color: rgba(255,255,255,.56); border-color: rgba(255,255,255,.24); }
 .spin { animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* ──── 协议 ──── */
 .terms-row { display: flex; align-items: flex-start; gap: 6px; }
 .terms-check { flex-shrink: 0; border: none; background: transparent; cursor: pointer; padding: 0; margin-top: 1px; }
-.terms-label { font-size: 12px; color: rgba(0,0,0,.45); line-height: 1.6; }
-.terms-link { color: #7b42f5; font-weight: 500; cursor: pointer; }
+.terms-label { font-size: 12px; color: rgba(255,255,255,.82); line-height: 1.6; text-shadow: 0 1px 5px rgba(15,23,42,.4); }
+.terms-link { color: #fff; font-weight: 700; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 
-/* ──── 第三方 ──── */
-.third-party { margin-top: 22px; }
-.divider { display: flex; align-items: center; gap: 12px; margin: 8px 20px 20px; }
-.divider-line { flex: 1; height: 1px; background: rgba(0,0,0,.08); }
-.divider-text { font-size: 12px; color: rgba(0,0,0,.3); white-space: nowrap; }
-.social-row { display: flex; justify-content: center; gap: 32px; }
-.social-btn {
-  width: 44px; height: 44px; border-radius: 50%;
-  border: 1px solid rgba(0,0,0,.08); background: rgba(123,66,245,0.04);
-  display: flex; align-items: center; justify-content: center; cursor: pointer;
-  transition: opacity .25s, transform .25s;
+/* ──── 左下角快捷登录 ──── */
+.social-login {
+  position: absolute; z-index: 4; left: 20px; bottom: max(24px, env(safe-area-inset-bottom, 16px));
+  display: flex; align-items: center; gap: 10px;
 }
-.social-btn:active { transform: scale(.9); }
-
-/* ──── 版权 ──── */
-.footer-text {
-  text-align: center; font-size: 11px; color: rgba(255,255,255,.55);
-  margin: 28px 0 0; opacity: 0; transition: opacity .5s ease .3s;
-  padding-bottom: env(safe-area-inset-bottom, 12px);
+.social-icon {
+  width: 36px; height: 36px; padding: 6px; border: 0; background: transparent;
+  display: flex; align-items: center; justify-content: center; filter: drop-shadow(0 1px 4px rgba(15,23,42,.35));
 }
-.footer-text.in { opacity: 1; }
+.social-icon.wechat { color: #07c160; }
+.social-icon.qq { color: #12b7f5; font-size: 14px; font-weight: 800; letter-spacing: -1px; }
+.social-icon.alipay { color: #1677ff; font-size: 23px; font-weight: 800; line-height: 1; }
 
 /* ──── 协议弹窗 ──── */
 .terms-popup { display: flex; flex-direction: column; height: 100%; background: #fff; }
@@ -605,9 +583,7 @@ onMounted(() => {
 /* ──── 移动端 ──── */
 @media screen and (max-width: 360px) {
   .auth-scroll { padding: 0 16px 24px; }
-  .form-card { padding: 20px 16px 16px; }
-  .app-title { font-size: 24px; }
-  .logo-ring { width: 56px; height: 56px; }
+  .form-card { padding: 4px 0 0; }
   .input-group { height: 46px; }
   .submit-btn { height: 48px; font-size: 16px; }
 }

@@ -52,6 +52,11 @@ class PlanResultCache:
             "days": str(req.get("days") or ""),
             "people": str(req.get("people") or ""),
             "budget": str(req.get("budget") or ""),
+            "total_budget": req.get("total_budget"),
+            "adults": req.get("adults"),
+            "children": req.get("children"),
+            "seniors": req.get("seniors"),
+            "session_id": req.get("session_id"),
             "styles": styles,
             "companion": str(req.get("companion") or ""),
             "hotel_level": str(req.get("hotel_level") or ""),
@@ -71,15 +76,14 @@ class PlanResultCache:
         """命中且未过期返回缓存的行程，否则返回 None。"""
         with self._lock:
             hit = self._store.get(key)
-        if hit is None:
-            return None
-        ts, plan = hit
-        if (_time.time() - ts) >= self.ttl:
-            # 过期即淘汰（顺带清理，避免过期条目一直占着容量）
-            with self._lock:
+            if hit is None:
+                return None
+            ts, plan = hit
+            if (_time.time() - ts) >= self.ttl:
                 self._store.pop(key, None)
-            return None
-        return plan
+                return None
+            self._store.move_to_end(key)
+            return plan
 
     def set(self, key: str, plan: Dict[str, Any]) -> None:
         """写入缓存：命中则刷新为最新（移到 LRU 尾部），超出容量淘汰最旧。"""

@@ -9,7 +9,10 @@
 *简历*.md
 *简历*.pdf
 *简历*.html
+*简历*.png
+resume-*.png
 resume.html
+resume-*.html
 _resume_assets/
 项目全解*.md
 
@@ -47,3 +50,19 @@ dist-ssr
 # AI 工具本地目录与安全审查文档（不提交）
 .workbuddy/
 项目代码审查报告.md
+
+# 部署包产物（tar.gz/tgz 构建快照，勿提交；GitHub 单文件 100MB 限制）
+deploy/*.tar.gz
+deploy/*.tgz
+
+# 审计构建产物
+trval-h5/.audit-build/
+
+# deploy 下临时源码快照/基线（与正式源码树重复，勿提交）
+deploy/staging_profile_login_20260901/
+deploy/profile-functional-baseline/
+
+# 简历校验临时文件（隐私敏感，勿提交）
+resume-*.pdf
+_resume_verify_tmp.pdf
+_verify_ai_engine.png

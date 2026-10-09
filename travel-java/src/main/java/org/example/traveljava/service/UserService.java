@@ -336,6 +336,17 @@ public class UserService {
         result.put("level", levelOf(points));
         result.put("nextLevel", nextLevelOf(points));
         result.put("pointsToNextLevel", pointsToNextLevel(points));
+        result.put("checkedIn", java.time.LocalDate.now(java.time.ZoneId.of("Asia/Shanghai")).equals(user.getLastCheckInDate()));
+        return result;
+    }
+
+    /** 按北京时间一天一次；条件更新同时发放积分，重复请求/并发请求不会重复奖励。 */
+    @Transactional
+    public Map<String, Object> checkIn(Long userId) {
+        int awarded = userRepository.checkInIfNewDay(userId,
+                java.time.LocalDate.now(java.time.ZoneId.of("Asia/Shanghai")));
+        Map<String, Object> result = getUserLevel(userId);
+        result.put("awardedPoints", awarded == 1 ? 5 : 0);
         return result;
     }
 }

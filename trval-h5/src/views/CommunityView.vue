@@ -487,11 +487,13 @@ const handleSearch = () => {
 }
 
 /* ==================== 滚动触底加载 ==================== */
-// 页面实际滚动在 window/body（.page-shell 不滚动），用 window 滚动度量触底
-const handleScroll = () => {
-  const scrollTop = window.scrollY || document.documentElement.scrollTop || 0
-  const scrollHeight = document.documentElement.scrollHeight
-  const clientHeight = window.innerHeight
+const handleScroll = (e) => {
+  const box = e && e.currentTarget && e.currentTarget.scrollHeight > e.currentTarget.clientHeight
+    ? e.currentTarget
+    : null
+  const scrollTop = box ? box.scrollTop : (window.scrollY || document.documentElement.scrollTop || 0)
+  const scrollHeight = box ? box.scrollHeight : document.documentElement.scrollHeight
+  const clientHeight = box ? box.clientHeight : window.innerHeight
   // BUGID PAGE-2 修复：首屏加载中或翻页中不触发，避免并发重复拉页
   if (scrollHeight - scrollTop - clientHeight < 120 && hasMore.value && !loadingMore.value && !isLoading.value) {
     loadNotes()
@@ -832,11 +834,13 @@ onBeforeUnmount(() => {
 .page-shell {
   width: 100%;
   min-height: 100vh;
+  height: 100vh;
+  height: 100dvh;
   padding-bottom: calc(10px + 48px + 12px + env(safe-area-inset-bottom, 0px));
   overflow-y: auto;
   overflow-x: hidden;
-  background: transparent;
   -webkit-overflow-scrolling: touch;
+  background: transparent;
   scroll-behavior: smooth;
   position: relative;
 }

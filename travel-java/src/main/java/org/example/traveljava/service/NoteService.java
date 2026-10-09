@@ -46,7 +46,12 @@ public class NoteService {
 
     /** 社区发现页：分页获取已发布游记（page 从 1 开始，过滤被举报隐藏） */
     public Page<Note> getAllPublishedNotes(int page, int size) {
-        return noteRepository.findByStatusAndHiddenFalseOrderByCreatedAtDesc("published", PageRequest.of(page - 1, size));
+        return searchPublished(page, size, null, false, null);
+    }
+
+    public Page<Note> searchPublished(int page, int size, Long userId, boolean videoOnly, String q) {
+        String query = (q == null || q.isBlank()) ? "" : q.trim();
+        return noteRepository.searchPublished("published", userId, videoOnly, query, PageRequest.of(page - 1, size));
     }
 
     public Note getNoteById(Long noteId) {

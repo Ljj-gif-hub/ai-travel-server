@@ -89,8 +89,8 @@ html, body {
   /* 磨砂玻璃主题 — 深色微妙渐变背景，让玻璃卡片更有层次感 */
   background: linear-gradient(175deg, #ede9f6 0%, #f0ecf9 15%, #f4f1fb 30%, #f8f7fd 50%, #f5f3fa 70%, #ede9f6 100%);
   background-attachment: fixed;
-  overflow-x: hidden;
-  overflow-y: auto;
+  /* clip 只裁切横向内容，不会像 hidden 一样创建滚动容器而破坏 sticky 顶栏 */
+  overflow-x: clip;
   touch-action: pan-y;
 }
 
@@ -99,7 +99,7 @@ html, body {
   max-width: 100vw;
   min-height: 100vh;
   background: transparent;
-  overflow-x: hidden;
+  overflow-x: clip;
   position: relative;
 }
 
@@ -144,7 +144,7 @@ html, body {
 .page-container {
   width: 100%;
   max-width: 100vw;
-  overflow-x: hidden;
+  overflow-x: clip;
 }
 
 /* ==================== 通用卡片容器 — iOS 透光磨砂玻璃 ====================

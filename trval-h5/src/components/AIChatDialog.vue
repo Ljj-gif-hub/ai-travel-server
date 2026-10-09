@@ -12,7 +12,7 @@ import {
   genMsgId,
 } from '../utils/chatSession'
 import MarkdownIt from 'markdown-it'
-import hljs from 'highlight.js'
+import hljs from 'highlight.js/lib/common'
 import 'highlight.js/styles/github.css'
 
 defineOptions({ name: 'AIChatDialog' })
@@ -53,6 +53,20 @@ const isAutoScrollEnabled = ref(true)
 let abortController = null
 const showQuickBar = ref(true)
 const isSavingPlan = ref(false)
+const showTools = ref(false)
+const messageInput = ref(null)
+const hasConversation = computed(() => messages.value.some(m => m.type === 'user' || m.type === 'ai'))
+const toolActions = computed(() => [
+  { text: t('chat.history'), icon: 'clock-o', key: 'history', disabled: isSending.value },
+  { text: t('chat.newConversation'), icon: 'add-o', key: 'new', disabled: isSending.value },
+  ...(hasConversation.value ? [{ text: t('chat.clearConversation'), icon: 'delete-o', key: 'clear', disabled: isSending.value }] : []),
+])
+const selectTool = (action) => {
+  showTools.value = false
+  if (action.key === 'history') openHistory()
+  else if (action.key === 'new') newConversation()
+  else if (action.key === 'clear') clearConversation()
+}
 
 /* ==================== Markdown 渲染 ==================== */
 const md = new MarkdownIt({
@@ -104,11 +118,14 @@ const quickQuestions = computed(() => [
 
 /* ==================== Guide Chips ==================== */
 const guideChips = computed(() => [
-  { label: t('chat.guideCouples'), query: t('chat.guideCouplesQuery') },
-  { label: t('chat.guideParents'), query: t('chat.guideParentsQuery') },
-  { label: t('chat.guideBudget3000'), query: t('chat.guideBudget3000Query') },
-  { label: t('chat.guideBeijing'), query: t('chat.guideBeijingQuery') },
-])
+  { key: 'weekend', icon: 'guide-o' },
+  { key: 'couples', icon: 'like-o' },
+  { key: 'parents', icon: 'friends-o' },
+  { key: 'beijing', icon: 'location-o' },
+].map(chip => ({
+  ...chip, label: t(`chat.drawer.${chip.key}`),
+  description: t(`chat.drawer.${chip.key}Hint`), query: t(`chat.drawer.${chip.key}Query`),
+})))
 
 /* ==================== Plan Detection ==================== */
 const hasPlanContent = (content) => {
@@ -366,9 +383,10 @@ const sendMessage = async () => {
   }
 }
 
-const sendQuickQuestion = (question) => {
+const fillSuggestion = async (question) => {
   inputText.value = question
-  sendMessage()
+  await nextTick()
+  messageInput.value?.focus()
 }
 
 /* 【修复】快捷指令携带上下文：将已有行程内容附带给AI */
@@ -476,7 +494,14 @@ const newConversation = () => {
 }
 
 /* 【修复】清空当前会话 */
-const clearConversation = () => {
+const clearConversation = async () => {
+  try {
+    await showConfirmDialog({
+      title: t('chat.clearConversation'), message: t('chat.drawer.clearCurrentMessage'),
+      zIndex: 10040,
+      confirmButtonText: t('chat.clearConfirm'), cancelButtonText: t('common.cancel'),
+    })
+  } catch { return }
   clearCurrentSession()
   messages.value = [{
     id: genMsgId(), type: 'system',
@@ -536,6 +561,7 @@ const removeConversation = async (id) => {
     await showConfirmDialog({
       title: t('chat.deleteConversationTitle'),
       message: t('chat.deleteConversationMsg'),
+      zIndex: 10040,
       confirmButtonText: t('chat.deleteConfirm'),
       cancelButtonText: t('common.cancel'),
     })
@@ -556,6 +582,7 @@ const startNewFromHistory = () => { newConversation(); showHistory.value = false
 watch(
   () => props.visible,
   async (val) => {
+    showTools.value = false
     if (val) {
       // 【修复】打开时从持久存储恢复会话消息
       initMessages()
@@ -593,24 +620,28 @@ onBeforeUnmount(() => {
 <template>
   <van-popup
     v-model:show="localVisible"
+    class="ai-chat-popup"
+    :aria-label="t('chat.assistantName')"
+    teleport="body"
+    :z-index="10000"
     position="bottom"
-    :style="{ height: '88%', maxHeight: '88vh' }"
+    :style="{ height: '88%', maxHeight: '88dvh' }"
     lock-scroll
     close-on-click-overlay
     round
-    safe-area-inset-bottom
     @update:show="(val) => !val && closeDialog()"
   >
     <div class="dialog-root">
+      <div class="drawer-handle" aria-hidden="true" />
       <!-- ======== 历史对话列表视图 ======== -->
       <div v-if="showHistory" class="history-view">
         <div class="history-header">
           <span class="history-title">{{ t('chat.history') }}</span>
-          <van-icon name="cross" size="20" color="#64748B" class="header-close" role="button" :aria-label="t('chat.close')" @click="showHistory = false" />
+          <button class="header-action-btn" :aria-label="t('chat.drawer.backToChat')" @click="showHistory = false"><van-icon name="arrow-left" size="20" /></button>
         </div>
         <div class="history-body">
           <div v-if="conversations.length === 0" class="history-empty">
-            <div class="history-empty-icon">🕘</div>
+            <van-icon class="history-empty-icon" name="clock-o" />
             <div class="history-empty-text">{{ t('chat.noHistory') }}</div>
           </div>
           <div v-else class="history-list">
@@ -633,20 +664,21 @@ onBeforeUnmount(() => {
       <template v-else>
       <!-- ======== Header ======== -->
       <div class="dialog-header">
-        <div class="header-left">
-          <button class="header-action-btn" @click="openHistory" :title="t('chat.history')" :aria-label="t('chat.history')">
-            <van-icon name="clock-o" size="18" color="#64748B" />
-          </button>
-          <button class="header-action-btn" @click="newConversation" :title="t('chat.newConversation')" :aria-label="t('chat.newConversation')">
-            <van-icon name="add-o" size="18" color="#64748B" />
-          </button>
+        <div class="assistant-brand">
+          <div class="brand-avatar" aria-hidden="true">
+            <svg viewBox="0 0 32 32" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round">
+              <circle cx="16" cy="16" r="11" opacity=".4" />
+              <path d="m21 11-3 7-7 3 3-7 7-3Z" fill="currentColor" fill-opacity=".12" />
+              <path d="m14 14 4 4M16 3v3m13 10h-3M16 29v-3M3 16h3" stroke-linecap="round" />
+            </svg>
+          </div>
+          <div><div class="header-title">{{ t('chat.assistantName') }}</div><div class="header-subtitle">{{ t('chat.drawer.subtitle') }}</div></div>
         </div>
-        <span class="header-title">{{ t('chat.assistantName') }}</span>
         <div class="header-right">
-          <button class="header-action-btn" @click="clearConversation" :title="t('chat.clearConversation')" :aria-label="t('chat.clearConversation')">
-            <van-icon name="delete-o" size="18" color="#EF4444" />
-          </button>
-          <van-icon name="cross" size="20" color="#64748B" class="header-close" role="button" :aria-label="t('chat.close')" @click="closeDialog" />
+          <van-popover v-model:show="showTools" :actions="toolActions" placement="bottom-end" :z-index="10020" @select="selectTool">
+            <template #reference><button class="header-action-btn" :aria-label="t('chat.drawer.more')" :aria-expanded="showTools" aria-haspopup="true"><van-icon name="ellipsis" size="21" /></button></template>
+          </van-popover>
+          <button class="header-action-btn" :aria-label="t('chat.close')" @click="closeDialog"><van-icon name="cross" size="19" /></button>
         </div>
       </div>
 
@@ -654,23 +686,17 @@ onBeforeUnmount(() => {
       <div ref="chatContent" class="chat-body" @scroll="handleScroll">
         <div class="chat-inner">
           <!-- Guide State -->
-          <div v-if="messages.length <= 1" class="chat-guide">
-            <div class="guide-illustration">
-              <svg viewBox="0 0 120 120" width="90" height="90">
-                <circle cx="60" cy="45" r="24" fill="rgba(139,92,246,0.12)" />
-                <circle cx="60" cy="45" r="14" fill="rgba(139,92,246,0.2)" />
-                <ellipse cx="60" cy="85" rx="30" ry="8" fill="rgba(139,92,246,0.06)" />
-                <circle cx="48" cy="40" r="4" fill="white" opacity="0.6" />
-                <circle cx="66" cy="38" r="4" fill="white" opacity="0.6" />
-                <line x1="60" y1="55" x2="60" y2="72" stroke="rgba(139,92,246,0.3)" stroke-width="3" stroke-linecap="round" />
-                <path d="M46 68 Q60 78 74 68" fill="none" stroke="rgba(139,92,246,0.25)" stroke-width="2.5" stroke-linecap="round" />
-              </svg>
-            </div>
-            <p class="guide-heading">{{ t('chat.guideHeading') }}</p>
-            <p class="guide-hint">{{ t('chat.guideHint') }}</p>
+          <div v-if="!hasConversation" class="chat-guide">
+            <div class="guide-eyebrow"><span aria-hidden="true" />{{ t('chat.drawer.eyebrow') }}</div>
+            <h2 class="guide-heading">{{ t('chat.drawer.heading') }}</h2>
+            <p class="guide-hint">{{ t('chat.drawer.hint') }}</p>
+            <p v-if="contextQuery.destination" class="guide-context"><van-icon name="location-o" />{{ contextQuery.destination }}<span v-if="contextQuery.days"> · {{ contextQuery.days }}{{ t('chat.drawer.daysUnit') }}</span><span v-if="contextQuery.budget"> · ¥{{ contextQuery.budget }}</span></p>
+            <div class="guide-section-title">{{ t('chat.drawer.ideas') }}</div>
             <div class="guide-chips">
-              <button v-for="(chip, i) in guideChips" :key="i" class="guide-chip" @click="sendQuickQuestion(chip.query)">
-                {{ chip.label }}
+              <button v-for="chip in guideChips" :key="chip.key" class="guide-chip" @click="fillSuggestion(chip.query)">
+                <span class="guide-chip-icon" aria-hidden="true"><van-icon :name="chip.icon" size="19" /></span>
+                <span class="guide-chip-title">{{ chip.label }}</span>
+                <span class="guide-chip-description">{{ chip.description }}</span>
               </button>
             </div>
           </div>
@@ -691,7 +717,7 @@ onBeforeUnmount(() => {
 
               <!-- AI message -->
               <div v-else-if="msg.type === 'ai'" class="ai-msg-row">
-                <div class="ai-avatar">🤖</div>
+                <div class="ai-avatar" aria-hidden="true"><van-icon name="guide-o" size="19" /></div>
                 <div class="ai-bubble" :class="{ streaming: msg.isStreaming }">
                   <!-- Thinking animation -->
                   <div v-if="isThinking && msg === messages[messages.length - 1]" class="thinking">
@@ -731,17 +757,21 @@ onBeforeUnmount(() => {
         <!-- Input row -->
         <div class="input-row">
           <div class="input-glass">
-            <button class="input-action" :class="{ listening: isListening }" :aria-label="t('chat.voiceInput')" @click="toggleVoiceInput">
-              <van-icon :name="isListening ? 'volume' : 'volume-o'" size="20" :color="isListening ? '#8B5CF6' : '#94A3B8'" />
-            </button>
-            <input
+            <textarea
+              ref="messageInput"
               v-model="inputText"
-              type="text"
-              :placeholder="t('chat.inputPlaceholder')"
+              rows="2"
+              :placeholder="t('chat.drawer.placeholder')"
+              :aria-label="t('chat.drawer.messageLabel')"
               class="msg-input"
-              @keyup.enter="sendMessage"
+              @keydown.ctrl.enter.prevent="!$event.isComposing && sendMessage()"
               @focus="scrollToBottom(true)"
             />
+            <div class="composer-actions">
+              <button class="input-action" :class="{ listening: isListening }" :aria-label="t('chat.voiceInput')" :aria-pressed="isListening" @click="toggleVoiceInput">
+                <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="9" y="3" width="6" height="12" rx="3" /><path d="M6 11v1a6 6 0 0 0 12 0v-1M12 18v3m-3 0h6" /></svg>
+                <span>{{ isListening ? t('chat.listening') : t('chat.voiceInput') }}</span>
+              </button>
             <button
               class="send-btn"
               :class="{ disabled: !inputText.trim() || isSending }"
@@ -752,6 +782,7 @@ onBeforeUnmount(() => {
               <van-icon v-if="!isSending" name="arrow-up" size="20" color="#fff" />
               <van-loading v-else size="16" color="#fff" />
             </button>
+            </div>
           </div>
         </div>
 
@@ -766,23 +797,25 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-/* ================================================================
-   AIChatDialog — 全屏遮罩AI聊天弹窗
-   【修复】z-index: 10000 → 高于底部5Tab导航(9999)和悬浮AI按钮(9995)
-   底部预留Tab栏高度(56px) + safe-area 缓冲空白
-   ================================================================ */
-
-/* 【修复】弹窗遮罩层级：高于Tab栏(9999)，低于Toast(99999) */
-:deep(.van-overlay) { z-index: 9990 !important; }
-:deep(.van-popup) { z-index: 10000 !important; }
+/* 覆盖全局底部弹层的 left:10px，保持抽屉左右等距。 */
+.ai-chat-popup.van-popup--bottom { width:calc(100% - 20px) !important; max-width:640px !important; left:0 !important; right:0; margin:0 auto; }
 
 /* ==================== Dialog Root ==================== */
 .dialog-root {
+  --chat-ink: #252334;
+  --chat-muted: #727084;
+  --chat-line: #ebe8f2;
+  --chat-card: #fff;
+  --chat-accent: #7043bd;
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: linear-gradient(175deg, #ede9f6 0%, #f0ecf9 30%, #f4f1fb 60%, #ede9f6 100%);
+  color: var(--chat-ink);
+  background: radial-gradient(ellipse at 10% 12%, #f0eafa 0, transparent 46%), #fcfbfe;
 }
+.drawer-handle { width:32px; height:4px; flex-shrink:0; border-radius:4px; background:#ded9e8; margin:9px auto 0; }
+.dialog-root button:focus-visible { outline:2px solid var(--chat-accent); outline-offset:3px; }
+.dialog-root button { font-family:inherit; }
 
 /* ==================== Header ==================== */
 .dialog-header {
@@ -790,44 +823,34 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
-  background: rgba(255,255,255,0.5);
-  backdrop-filter: blur(18px) saturate(170%);
-  -webkit-backdrop-filter: blur(18px) saturate(170%);
-  border-bottom: 0.5px solid rgba(0,0,0,0.05);
+  gap: 8px;
+  padding: 12px 18px 14px;
+  border-bottom: 1px solid var(--chat-line);
 }
-.header-left, .header-right { display: flex; align-items: center; gap: 6px; }
+.assistant-brand { display:flex; align-items:center; gap:10px; min-width:0; }
+.brand-avatar { width:40px; height:40px; border-radius:14px; display:grid; place-items:center; flex-shrink:0; background:#eee7fb; color:var(--chat-accent); }
+.header-right { display:flex; align-items:center; gap:2px; flex-shrink:0; }
 .header-title {
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 700;
-  color: #1E293B;
+  color: var(--chat-ink);
 }
+.header-subtitle { font-size:11px; color:var(--chat-muted); margin-top:3px; }
 .header-action-btn {
-  width: 36px; height: 36px; min-width: 36px; min-height: 36px;
+  width: 40px; height: 40px; min-width: 40px; min-height: 40px;
   display: flex; align-items: center; justify-content: center;
   border: none; background: transparent; border-radius: 50%;
-  cursor: pointer; transition: background 0.2s;
+  color:var(--chat-muted); cursor: pointer; transition: background 0.2s;
 }
 .header-action-btn:active { background: rgba(0,0,0,0.05); }
-.header-close {
-  cursor: pointer;
-  width: 36px; height: 36px; min-width: 36px; min-height: 36px;
-  display: flex; align-items: center; justify-content: center;
-  border-radius: 50%;
-  transition: background 0.2s;
-}
-.header-close:active {
-  background: rgba(0, 0, 0, 0.05);
-}
 
 /* ==================== Chat Body ==================== */
 .chat-body {
-  /* 【修复】动态计算高度：100% - header(52px) - footer(~130px) */
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 16px 14px;
-  padding-bottom: 20px;
+  padding: 22px 20px;
   -webkit-overflow-scrolling: touch;
   isolation: isolate;
 }
@@ -841,51 +864,56 @@ onBeforeUnmount(() => {
 .chat-guide {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  padding-top: 30px;
-  text-align: center;
+  align-items: stretch;
+  padding-top: 8px;
+  text-align: left;
 }
-.guide-illustration {
-  margin-bottom: 20px;
-}
+.guide-eyebrow { display:flex; align-items:center; gap:7px; font-size:11px; color:var(--chat-accent); font-weight:600; margin-bottom:12px; }
+.guide-eyebrow span { width:5px; height:5px; border-radius:50%; background:currentColor; }
 .guide-heading {
-  font-size: 20px;
+  font-size: 25px;
+  line-height: 1.35;
+  letter-spacing: -0.5px;
   font-weight: 700;
-  color: #1E293B;
-  margin: 0 0 8px;
+  color: var(--chat-ink);
+  margin: 0 0 12px;
 }
 .guide-hint {
   font-size: 13px;
-  color: #94A3B8;
-  margin: 0 0 24px;
+  line-height: 1.8;
+  color: var(--chat-muted);
+  margin: 0;
 }
+.guide-context { display:flex; align-items:center; flex-wrap:wrap; gap:4px; font-size:12px; color:var(--chat-accent); margin:12px 0 0; }
+.guide-section-title { font-size:12px; color:var(--chat-muted); margin:28px 0 12px; }
 .guide-chips {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
-  justify-content: center;
-  max-width: 340px;
 }
 .guide-chip {
-  padding: 10px 18px;
-  background: rgba(255,255,255,0.55);
-  backdrop-filter: blur(10px) saturate(150%);
-  -webkit-backdrop-filter: blur(10px) saturate(150%);
-  border: 1px solid rgba(255,255,255,0.4);
-  border-radius: 22px;
-  font-size: 13px;
-  color: #475569;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  padding: 14px;
+  background: var(--chat-card);
+  border: 1px solid var(--chat-line);
+  border-radius: 16px;
+  color: var(--chat-ink);
   cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02);
-  transition: all 0.2s;
+  box-shadow: 0 3px 10px rgba(37,35,52,0.025);
+  transition: border-color 0.2s, transform 0.2s;
 }
+.guide-chip-icon { display:grid; place-items:center; width:30px; height:30px; margin-bottom:11px; border-radius:10px; background:#f3effb; color:var(--chat-accent); }
+.guide-chip-title { font-size:14px; font-weight:600; line-height:1.4; }
+.guide-chip-description { font-size:12px; color:var(--chat-muted); line-height:1.65; margin-top:5px; }
 .guide-chip:hover {
   border-color: #c4b5fd;
   color: #7C3AED;
 }
 .guide-chip:active {
   transform: scale(0.96);
-  background: #faf5ff;
 }
 
 /* ==================== Message List ==================== */
@@ -924,13 +952,13 @@ onBeforeUnmount(() => {
 .user-bubble {
   max-width: 75%;
   padding: 12px 18px;
-  background: linear-gradient(135deg, #A78BFA 0%, #8B5CF6 100%);
+  background: #7546c8;
   color: #fff;
   border-radius: 20px 20px 6px 20px;
   font-size: 15px;
   line-height: 1.6;
   word-break: break-word;
-  box-shadow: 0 4px 14px rgba(139, 92, 246, 0.25);
+  box-shadow: 0 3px 10px rgba(139, 92, 246, 0.12);
 }
 .user-avatar {
   width: 34px;
@@ -959,12 +987,13 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   font-size: 18px;
+  color: var(--chat-accent);
   flex-shrink: 0;
 }
 .ai-bubble {
   max-width: 80%;
   padding: 14px 18px;
-  background: rgba(255, 255, 255, 0.8);
+  background: var(--chat-card);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   border-radius: 6px 20px 20px 20px;
@@ -972,7 +1001,7 @@ onBeforeUnmount(() => {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
   font-size: 14px;
   line-height: 1.7;
-  color: #334155;
+  color: var(--chat-ink);
   word-break: break-word;
   min-width: 70px;
 }
@@ -1149,15 +1178,11 @@ onBeforeUnmount(() => {
 .chat-footer {
   flex-shrink: 0;
   position: relative;
-  z-index: 100;
-  padding: 6px 14px;
-  /* 【修复】底部预留 Tab栏高度(56px) + safe-area + 12px间隙，输入框完全不被遮挡 */
-  padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px) + 12px);
-  background: rgba(255, 255, 255, 0.72);
+  padding: 12px 16px calc(14px + env(safe-area-inset-bottom, 0px));
+  background: rgba(252, 251, 254, 0.84);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border-top: 1px solid rgba(139, 92, 246, 0.08);
-  box-shadow: 0 -4px 20px rgba(139, 92, 246, 0.06);
+  border-top: 1px solid var(--chat-line);
 }
 
 /* SSE reconnect hint */
@@ -1205,32 +1230,36 @@ onBeforeUnmount(() => {
 }
 .input-glass {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 6px 6px 16px;
-  background: rgba(255, 255, 255, 0.8);
+  flex-direction: column;
+  gap: 6px;
+  padding: 13px 12px 9px;
+  background: var(--chat-card);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
-  border: 1.5px solid rgba(139, 92, 246, 0.1);
-  border-radius: 28px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.03);
+  border: 1px solid #ded4ef;
+  border-radius: 20px;
+  box-shadow: 0 4px 18px rgba(64, 39, 104, 0.04);
   transition: border-color 0.25s, box-shadow 0.25s;
 }
+.composer-actions { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .input-glass:focus-within {
   border-color: rgba(139, 92, 246, 0.35);
   box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.08);
 }
 
 .input-action {
-  width: 36px;
-  height: 36px;
+  min-height: 40px;
+  padding: 0 6px;
+  gap: 6px;
+  color: var(--chat-muted);
+  font-size: 11px;
   display: flex;
   align-items: center;
   justify-content: center;
   border: none;
   background: transparent;
   cursor: pointer;
-  border-radius: 50%;
+  border-radius: 12px;
   flex-shrink: 0;
   transition: background 0.2s;
 }
@@ -1251,30 +1280,34 @@ onBeforeUnmount(() => {
 }
 
 .msg-input {
-  flex: 1;
+  width: 100%;
   min-width: 0;
   border: none;
   outline: none;
   background: transparent;
-  font-size: 16px;
-  color: #1E293B;
-  padding: 10px 0;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--chat-ink);
+  padding: 0 3px;
+  resize: none;
+  box-sizing: border-box;
 }
 .msg-input::placeholder {
-  color: #94A3B8;
+  color: #918b9f;
   opacity: 1;
 }
 .msg-input::-webkit-input-placeholder {
-  color: #94A3B8;
+  color: #918b9f;
   opacity: 1;
 }
 
 .send-btn {
-  width: 38px;
-  height: 38px;
-  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  border-radius: 13px;
   border: none;
-  background: linear-gradient(135deg, #8B5CF6, #6366F1);
+  background: #7546c8;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1287,7 +1320,7 @@ onBeforeUnmount(() => {
   transform: scale(0.92);
 }
 .send-btn.disabled {
-  background: #CBD5E1;
+  background: #ded9e9;
   box-shadow: none;
   cursor: not-allowed;
 }
@@ -1312,17 +1345,14 @@ onBeforeUnmount(() => {
 
 /* ==================== Small screen adaptation ==================== */
 @media screen and (max-width: 360px) {
-  .chat-body {
-    padding: 12px 10px;
-    padding-bottom: calc(120px + env(safe-area-inset-bottom, 0px));
-  }
-  .chat-footer {
-    padding: 4px 10px;
-    padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px));
-  }
-  .input-glass {
-    padding: 4px 4px 4px 12px;
-  }
+  .chat-body { padding:18px 14px; }
+  .dialog-header { padding-left:14px; padding-right:10px; }
+  .assistant-brand { gap:7px; }
+  .brand-avatar { width:34px; height:34px; }
+  .header-title { font-size:14px; }
+  .guide-heading { font-size:23px; }
+  .guide-chip { padding:12px; }
+  .chat-footer { padding-left:12px; padding-right:12px; }
 }
 
 /* ==================== 历史对话列表视图 ==================== */
@@ -1345,4 +1375,22 @@ onBeforeUnmount(() => {
 .hi-del:active { background:rgba(239,68,68,0.1); }
 .history-new-btn { display:flex; align-items:center; justify-content:center; gap:6px; margin:16px auto 0; padding:11px 26px; background:linear-gradient(135deg,#8B5CF6,#6366F1); color:#fff; border:none; border-radius:24px; font-size:14px; font-weight:600; cursor:pointer; box-shadow:0 4px 14px rgba(139,92,246,0.3); }
 .history-new-btn:active { transform:scale(.96); }
+:global(html[data-theme='dark']) .dialog-root {
+  --chat-ink:#eeeaf5; --chat-muted:#aea6c0; --chat-line:#393246;
+  --chat-card:#272231; --chat-accent:#c4a8f6;
+  background:radial-gradient(ellipse at 10% 12%, #332541 0, transparent 46%), #1d1925;
+}
+:global(html[data-theme='dark']) .chat-footer { background:rgba(29,25,37,.88); }
+:global(html[data-theme='dark']) .brand-avatar,
+:global(html[data-theme='dark']) .guide-chip-icon,
+:global(html[data-theme='dark']) .ai-avatar { background:#3b2e50; }
+:global(html[data-theme='dark']) .input-glass { border-color:#56426e; }
+:global(html[data-theme='dark']) .send-btn.disabled { background:#493f56; }
+.history-item { background:var(--chat-card); border-color:var(--chat-line); }
+.history-title, .hi-title { color:var(--chat-ink); }
+.history-header { background:transparent; border-color:var(--chat-line); }
+.hi-preview, .hi-time, .history-empty { color:var(--chat-muted); }
+@media (prefers-reduced-motion: reduce) {
+  .dialog-root *, .dialog-root *::before, .dialog-root *::after { animation:none !important; transition:none !important; }
+}
 </style>

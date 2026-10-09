@@ -35,10 +35,10 @@ describe('useRequest 三态', () => {
     expect(error.value).toBeNull()
   })
 
-  it('失败：error 记录异常，loading 复位，异常向上抛出', async () => {
+  it('失败：error 记录异常，loading 复位，返回 undefined', async () => {
     const fn = vi.fn(() => Promise.reject(new Error('boom')))
     const { loading, error, run } = useRequest(fn, { manual: true })
-    await expect(run()).rejects.toThrow('boom')
+    await expect(run()).resolves.toBeUndefined()
     expect(error.value).toMatchObject({ message: 'boom' })
     expect(loading.value).toBe(false)
   })

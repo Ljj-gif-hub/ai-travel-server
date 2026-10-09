@@ -15,7 +15,7 @@ import { CHAT_SYSTEM_PROMPT } from '../constants/systemPrompts'
 import { getCurrentSessionId, getCurrentSessionMessages, saveCurrentSessionMessages, clearCurrentSession, createNewSession, getAllSessions, switchToSession, deleteSession, genMsgId } from '../utils/chatSession'
 
 import MarkdownIt from 'markdown-it'
-import hljs from 'highlight.js'
+import hljs from 'highlight.js/lib/common'
 import 'highlight.js/styles/github.css'
 import VirtualList from '../components/VirtualList.vue'
 

@@ -29,6 +29,7 @@ export default {
   // Budget popup
   perPersonBudget: 'Budget per Person',
   totalBudget: 'Total Budget',
+  budgetPriorityHint: 'When set, the total budget takes priority and is divided by the number of travelers.',
   budgetTitle: 'Budget',
   unitWan: 'w',
   budgetPerPerson: '{amount}/person',
@@ -47,6 +48,7 @@ export default {
   manualCreate: 'Create manually',
   // Traveler count popup
   travelerCount: 'Travelers',
+  travelerLimit: 'Choose 1–20 travelers in total',
   elderly: 'Seniors',
   elderlyRange: '60+',
   adult: 'Adults',

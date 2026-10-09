@@ -4,6 +4,7 @@ import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "users", uniqueConstraints = {
     @UniqueConstraint(columnNames = "username"),
     @UniqueConstraint(columnNames = "phone")
@@ -46,6 +47,11 @@ public class User {
 
     @Column(name = "points")
     private Integer points = 0;
+
+    @Column(name = "last_check_in_date")
+    private java.time.LocalDate lastCheckInDate;
+
+    public java.time.LocalDate getLastCheckInDate() { return lastCheckInDate; }
 
     @Column(name = "following_count")
     private Integer followingCount = 0;

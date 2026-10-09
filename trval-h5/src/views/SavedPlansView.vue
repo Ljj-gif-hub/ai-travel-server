@@ -188,7 +188,7 @@ onDeactivated(() => { isLoading.value = false; loadError.value = false })
   background: transparent;
   padding-bottom: calc(62px + var(--safe-area-bottom) + 16px);
   box-sizing: border-box;
-  overflow-x: hidden;
+  overflow-x: clip;
 }
 
 /* ==================== 导航栏 ==================== */

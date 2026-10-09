@@ -136,12 +136,30 @@ const routes = [
     component: () => import('../views/DestinationDetailView.vue'),
     meta: { transition: 'slide-left' },
   },
+  {
+    path: '/attraction-search',
+    name: 'AttractionSearch',
+    component: () => import('../views/AttractionSearchView.vue'),
+    meta: { transition: 'slide-left', hideTabBar: true },
+  },
+  {
+    path: '/attraction-detail',
+    name: 'AttractionDetail',
+    component: () => import('../views/AttractionDetailView.vue'),
+    meta: { transition: 'slide-left', hideTabBar: true },
+  },
 
   /* ==================== 个人中心子页面（slide-left） ==================== */
   {
     path: '/edit-profile',
     name: 'EditProfile',
     component: () => import('../views/EditProfileView.vue'),
+    meta: { transition: 'slide-left' },
+  },
+  {
+    path: '/settings',
+    name: 'Settings',
+    component: () => import('../views/SettingsView.vue'),
     meta: { transition: 'slide-left' },
   },
   {
@@ -294,8 +312,9 @@ router.beforeEach((to, from) => {
 const whiteList = [
   // 仅公开浏览页/登录注册可匿名访问；写操作与个人数据页必须登录
   '/', '/community', '/trips', '/profile',
-  '/login', '/register', '/about',
+  '/login', '/register', '/about', '/settings',
   '/planning', '/destinations', '/destination-detail',
+  '/attraction-search', '/attraction-detail',
   '/notes', '/note-detail', '/video-detail',
   '/ai-planner', // 重定向路由（→/agent-planner，目标路由受守卫保护）
   '/city-select', '/attraction-select',
@@ -304,40 +323,33 @@ const whiteList = [
 ]
 
 router.beforeEach((to, from, next) => {
-  const token = getToken()
+  let token = getToken()
 
-  // Token 已过期（JWT exp 校验）
-  if (token && isTokenExpired(token) && to.path !== '/login') {
-    // AUTH-1 修复：access token 过期时优先尝试用 refresh token 续期，而非直接踢回登录页
-    const refreshToken = getRefreshToken()
-    if (refreshToken) {
-      // 有 refresh token：不清登录态，放行导航，由 axios 401 拦截器单飞刷新
-      // （refresh token 7 天有效期内可实现免登录；刷新失败时 axios 层会清登录态并跳转登录）
-      next()
-      return
-    }
-    // 无 refresh token：清 access + refresh token，回登录页
+  // 过期且没法刷新 → 当游客，公开页放行（不要再踢回登录，否则和「有 token 就离开登录页」互相踢）
+  if (token && isTokenExpired(token) && !getRefreshToken()) {
     removeToken()
     removeRefreshToken()
-    localStorage.setItem('redirectUrl', to.fullPath)
-    next({ path: '/login' })
+    token = null
+  }
+
+  const tokenValid = !!(token && !isTokenExpired(token))
+
+  if (tokenValid && to.path === '/login') {
+    next({ path: '/', replace: true })
     return
   }
 
   if (token) {
-    if (to.path === '/login') {
-      next({ path: '/' })
-    } else {
-      next()
-    }
+    next()
+    return
+  }
+
+  if (whiteList.includes(to.path) || to.path.startsWith('/share/')) {
+    next()
   } else {
-    // 分享落地页公开访问（短链 token）
-    if (whiteList.includes(to.path) || to.path.startsWith('/share/')) {
-      next()
-    } else {
-      localStorage.setItem('redirectUrl', to.fullPath)
-      next({ path: '/login' })
-    }
+    if (to.path !== '/login') localStorage.setItem('redirectUrl', to.fullPath)
+    try { sessionStorage.removeItem('selected_destination_spot') } catch { /* noop */ }
+    next({ path: '/login', replace: true })
   }
 })
 

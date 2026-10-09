@@ -2,7 +2,7 @@
 import { ref, reactive, computed, watch, nextTick, onMounted, onActivated, onDeactivated, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { showToast, showLoadingToast, Swipe, SwipeItem } from 'vant'
+import { showToast, Swipe, SwipeItem } from 'vant'
 
 /*
  * 【Bug修复】显式声明组件名，供 keep-alive 的 include 白名单匹配
@@ -10,12 +10,14 @@ import { showToast, showLoadingToast, Swipe, SwipeItem } from 'vant'
  */
 defineOptions({ name: 'HomeView' })
 import { areaList } from '@vant/area-data'
-import SearchBar from '../components/SearchBar.vue'
 import { defineAsyncComponent } from 'vue'
 const AIChatDialog = defineAsyncComponent(() => import('../components/AIChatDialog.vue'))
 import EmptyState from '../components/EmptyState.vue'
 import { getHotDestinations } from '../api/destination'
-import { noteApi, followApi, commentApi, uploadApi } from '../api'
+import { getHotSpotNames, findAttractionByName } from '../api/attraction'
+import { HOME_PLAN_SAFE } from '../data/homePlanImages'
+import { useStickyAfterTrigger } from '../composables/useStickyAfterTrigger'
+import { noteApi, followApi, commentApi, uploadApi, planApi } from '../api'
 import { getToken } from '../utils/auth'
 import { avatarUrl } from '../utils/avatar'
 
@@ -34,20 +36,20 @@ const wheelHandlers = ref([])
 /* ==================== 更多产品弹出层 ==================== */
 const showMoreProducts = ref(false)
 const moreProductList = [
-  { key: 'visa', icon: 'idcard', color: '#6366F1' },
-  { key: 'guide', icon: 'flag-o', color: '#3B82F6' },
-  { key: 'cruise', icon: 'guide-o', color: '#0891B2' },
-  { key: 'wifi', icon: 'phone-o', color: '#8B5CF6' },
-  { key: 'insurance', icon: 'shield-o', color: '#22C55E' },
-  { key: 'postcard', icon: 'envelop-o', color: '#F59E0B' },
-  { key: 'localGoods', icon: 'gift-o', color: '#EF4444' },
-  { key: 'travelPhoto', icon: 'photo-o', color: '#EC4899' },
-  { key: 'selfDrive', icon: 'car-o', color: '#F97316' },
-  { key: 'luggage', icon: 'bag-o', color: '#14B8A6' },
-  { key: 'currency', icon: 'gold-coin-o', color: '#EAB308' },
-  { key: 'lounge', icon: 'star-o', color: '#A855F7' },
-  { key: 'localExperience', icon: 'location-o', color: '#06B6D4' },
-  { key: 'healthCheck', icon: 'first-aid', color: '#84CC16' },
+  { key: 'visa', icon: 'idcard' },
+  { key: 'guide', icon: 'flag-o' },
+  { key: 'cruise', icon: 'guide-o' },
+  { key: 'wifi', icon: 'phone-o' },
+  { key: 'insurance', icon: 'shield-o' },
+  { key: 'postcard', icon: 'envelop-o' },
+  { key: 'localGoods', icon: 'gift-o' },
+  { key: 'travelPhoto', icon: 'photo-o' },
+  { key: 'selfDrive', icon: 'logistics' },
+  { key: 'luggage', icon: 'bag-o' },
+  { key: 'currency', icon: 'gold-coin-o' },
+  { key: 'lounge', icon: 'star-o' },
+  { key: 'localExperience', icon: 'location-o' },
+  { key: 'healthCheck', icon: 'service-o' },
 ]
 
 /* ==================== 热门目的地快捷标签 ==================== */
@@ -113,31 +115,29 @@ const quickEntries = [
   { name: '游记社区', icon: 'file-text-o', color: '#3B82F6', path: '/notes' },
 ]
 
-/* ==================== Layer 2: 服务图标网格 Row 1 ==================== */
+/* ==================== Layer 2: 服务图标 — 首行 4 个，其余进抽屉 ==================== */
 const serviceRow1 = [
-  { key: 'hotel', icon: 'hotel-o', color: '#8B5CF6' },
-  { key: 'guide', icon: 'guide-o', color: '#6366F1' },
-  { key: 'flight', icon: 'plane-o', color: '#3B82F6' },
-  { key: 'train', icon: 'train-o', color: '#F59E0B' },
-  { key: 'custom', icon: 'backpack-o', color: '#34D399' },
+  { key: 'hotel', icon: 'M4 21V5h10v16M14 11h6v10M2 21h20M8 9h2M8 13h2M8 17h2M17 15h1M17 18h1', ready: true, path: '/hotel-booking' },
+  { key: 'flight', icon: 'M12 2c-1 0-1.5 1-1.5 2v5L3 13v2l7.5-2v5L8 20v1l4-1 4 1v-1l-2.5-2v-5L21 15v-2l-7.5-4V4c0-1-.5-2-1.5-2Z', ready: true, path: '/flight-booking' },
+  { key: 'guide', icon: 'm3 5 6-2 6 2 6-2v16l-6 2-6-2-6 2V5ZM9 3v16M15 5v16', ready: true, path: '/destinations' },
 ]
-
-/* ==================== Layer 2b: 服务图标网格 Row 2 ==================== */
 const serviceRow2 = [
-  { key: 'homestay', icon: 'home-o', color: '#8B5CF6' },
-  { key: 'tickets', icon: 'orders-o', color: '#F59E0B' },
-  { key: 'pickup', icon: 'bus-o', color: '#3B82F6' },
-  { key: 'car', icon: 'car-o', color: '#F97316' },
-  { key: 'tour', icon: 'flag-o', color: '#34D399' },
+  { key: 'train', icon: 'exchange', ready: false },
+  { key: 'homestay', icon: 'home-o', ready: false },
+  { key: 'tickets', icon: 'orders-o', ready: false },
+  { key: 'pickup', icon: 'logistics', ready: false },
+  { key: 'car', icon: 'logistics', ready: false },
+  { key: 'tour', icon: 'flag-o', ready: false },
 ]
 
 /* ==================== Layer 5: 快捷功能标签 ==================== */
 const quickTabs = [
-  { name: '特价/直播', icon: 'coupon-o' },
-  { name: '演出/展览', icon: 'music-o' },
-  { name: '行程规划', icon: 'compass-o' },
-  { name: '旅行热点', icon: 'fire-o' },
-  { name: '旅游榜单', icon: 'medal-o' },
+  { name: '特价/直播', shortName: '特价', icon: 'coupon-o' },
+  { name: '演出/展览', shortName: '展演', icon: 'music-o' },
+  { name: '行程规划', shortName: '线路', icon: 'exchange' },
+  { name: '旅行热点', shortName: '热点', icon: 'fire-o' },
+  { name: '旅游榜单', shortName: '榜单', icon: 'medal-o' },
+  { name: '地图', shortName: '地图', icon: 'location-o' },
 ]
 
 /* ==================== 图片API ==================== */
@@ -166,28 +166,13 @@ const getImageUrl = (keyword) => staticImageMap.value[keyword] || `/api/city/ima
 
 /** 兜底：静态 JSON（API 未覆盖时用） */
 const resolveImage = (keyword) => staticImageMap.value[keyword] || getImageUrl(keyword)
+const heroImage = '/travel-hero.jpg'
 
-/* ==================== Layer 6: 双列卡片 ==================== */
-// BUGID L-HOME-1 修复：默认封面改为 computed，staticImageMap 加载完成后自动重算，避免首屏裂图
-const eventBanner = computed(() => ({
-  image: getImageUrl('三亚'),
-  title: 'home.summerTravel',
-  label: 'home.hotActivity',
-  link: '/destination-detail?city=三亚',
-}))
-const citySeedCard = computed(() => ({
-  image: getImageUrl('北京'),
-  label: 'home.citySeed',
-  cta: 'home.aiPlanForMe',
-}))
-
-/* ==================== 默认数据 ==================== */
-// BUGID L-HOME-1 修复：默认 Banners/目的地封面改为 computed，staticImageMap 就绪后自动重算
-const defaultBanners = computed(() => [
-  { id: 1, image: getImageUrl('大理'), title: '云南大理', subtitle: 'home.bannerSubtitle1', link: '/destination-detail?city=大理' },
-  { id: 2, image: getImageUrl('拉萨'), title: '西藏拉萨', subtitle: 'home.bannerSubtitle2', link: '/destination-detail?city=拉萨' },
-  { id: 3, image: getImageUrl('天山'), title: '新疆天山', subtitle: 'home.bannerSubtitle3', link: '/destination-detail?city=乌鲁木齐' },
-  { id: 4, image: getImageUrl('三亚'), title: '海南三亚', subtitle: 'home.bannerSubtitle4', link: '/destination-detail?city=三亚' },
+// 保留旅行灵感中的特色轮播，与普通游记卡片并列展示。
+const promotionSlides = computed(() => [
+  { image: getImageUrl('迪士尼'), title: 'home.promoFamilyTitle', subtitle: 'home.promoFamilySubtitle', tag: 'home.promoFamilyTag' },
+  { image: getImageUrl('黄果树瀑布'), title: 'home.promoGuizhouTitle', subtitle: 'home.promoGuizhouSubtitle', tag: 'home.promoGuizhouTag' },
+  { image: getImageUrl('都江堰'), title: 'home.promoDujiangyanTitle', subtitle: 'home.promoDujiangyanSubtitle', tag: 'home.promoDujiangyanTag' },
 ])
 
 const defaultDestinations = computed(() => [
@@ -204,7 +189,7 @@ const defaultDestinations = computed(() => [
 const ph = (hue, label) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="hsl(${hue},60%,65%)"/><stop offset="100%" stop-color="hsl(${hue+30},70%,45%)"/></linearGradient></defs><rect fill="url(#g)" width="400" height="300"/><text fill="rgba(255,255,255,0.7)" font-size="28" font-family="sans-serif" x="200" y="150" text-anchor="middle" dominant-baseline="middle">${label}</text></svg>`)}`
 
 /* ==================== 社区种子数据（fallback） ==================== */
-const seedNotes = [
+const seedNotes = computed(() => [
   {
     id: 1,
     author: { nickname: '带着娃看世界', avatar: avatarUrl('family', ''), city: '上海', isFollowing: false, online: true, userId: 'u6' },
@@ -297,7 +282,7 @@ const seedNotes = [
     viewCount: 19500, likeCount: 0, isLiked: false, tag: '深圳', time: '3天前',
     hasVideo: false,
   },
-]
+])
 
 const defaultExperiences = [
   { id: 1, key: 'riceNoodles', icon: 'food-o', color: '#FCA5A5' },
@@ -309,13 +294,11 @@ const defaultExperiences = [
 ]
 
 /* ==================== 响应式数据 ==================== */
-const banners = ref([])
 const hotDestinations = ref([])
 const experiences = ref([])
 
 const isLoading = ref({ destinations: true, notes: true })
 
-const loadBanners = () => { banners.value = defaultBanners.value }
 const loadHotDestinations = async () => {
   isLoading.value.destinations = true
   try {
@@ -401,24 +384,14 @@ const getRightCardAspect = (index) => 'aspect-3-4'
 
 // 携程风瀑布流：显示所有已加载的笔记（随滚动加载逐步增多，不再固定前10条）
 const displayNotes = computed(() => notes.value)
-
-// 【修复】左列：偶数索引（包含0号，原逻辑丢弃索引0导致首条视频不显示）
-// 推广轮播作为左列顶部额外卡片，不挤占任何一条笔记
-const leftColumnNotes = computed(() => displayNotes.value.filter((_, index) => index % 2 === 0))
-
-// 右列：奇数索引
-const rightColumnNotes = computed(() => displayNotes.value.filter((_, index) => index % 2 === 1))
+const noteColumns = computed(() => [
+  displayNotes.value.filter((_, index) => index % 2 === 0),
+  displayNotes.value.filter((_, index) => index % 2 === 1),
+])
 
 const goToCommunity = () => {
   try { router.push('/notes') } catch (e) { console.error('goToCommunity 失败:', e) }
 }
-
-// BUGID L-HOME-1 修复：推广轮播改为 computed，staticImageMap 就绪后自动重算，避免首屏裂图
-const promotionSlides = computed(() => [
-  { image: getImageUrl('迪士尼'), title: 'home.promoFamilyTitle', subtitle: 'home.promoFamilySubtitle', tag: 'home.promoFamilyTag' },
-  { image: getImageUrl('黄果树瀑布'), title: 'home.promoGuizhouTitle', subtitle: 'home.promoGuizhouSubtitle', tag: 'home.promoGuizhouTag' },
-  { image: getImageUrl('都江堰'), title: 'home.promoDujiangyanTitle', subtitle: 'home.promoDujiangyanSubtitle', tag: 'home.promoDujiangyanTag' },
-])
 
 /* BUGID PAGE-1 修复：加载序号守卫，防止触底滚动与首屏加载并发重复拉页（旧的 loadingMore 无并发守卫） */
 const loadSeq = ref(0)
@@ -446,13 +419,13 @@ const loadNotes = async (reset = false) => {
       hasMore.value = res.data.hasMore !== undefined ? res.data.hasMore : (list.length >= (res.data.size || 10))
       page.value += 1
     } else {
-      if (reset) notes.value = [...seedNotes]
+      if (reset) notes.value = [...seedNotes.value]
       hasMore.value = false
     }
   } catch (e) {
     if (seq !== loadSeq.value) return
     console.warn('加载社区笔记失败，使用本地种子数据:', e.message)
-    if (reset) notes.value = [...seedNotes]
+    if (reset) notes.value = [...seedNotes.value]
     hasMore.value = false
   } finally {
     if (seq !== loadSeq.value) return
@@ -560,6 +533,14 @@ const getNoteCoverImage = (note) => {
   if (!note?.images?.length) return ''
   const cover = note.images.find(img => !isVideoUrl(img))
   return cover || ''
+}
+
+// 封面失败只切换一次到中性占位图，不使用无关城市或视频画面冒充实拍。
+const coverPlaceholder = '/travel-cover.svg'
+const onCoverError = (event) => {
+  const img = event.target
+  if (img.getAttribute('src') === coverPlaceholder) return
+  img.src = coverPlaceholder
 }
 
 const goToDetail = (note) => {
@@ -689,20 +670,83 @@ const onTabChange = (key) => {
 }
 
 /* ==================== 事件 ==================== */
-let planningTimer = null // 开始规划跳转定时器：onUnmounted 时清理
-const startPlanning = () => {
+const goToAgentPlanner = () => { router.push('/agent-planner') }
+const spotSearchTags = getHotSpotNames()
+const myPlans = ref([])
+const latestPlan = computed(() => myPlans.value[0] || null)
+const stripSpotName = (s) => String(s || '').replace(/<[^>]+>/g, '').replace(/【[^】]*】/g, '').replace(/\[.*?\]/g, '').trim()
+const matchSafePlanSpot = (name) => {
+  if (HOME_PLAN_SAFE[name]) return name
+  return Object.keys(HOME_PLAN_SAFE).filter(k => name.includes(k)).sort((a, b) => b.length - a.length)[0] || ''
+}
+const brokenPlanNames = ref(new Set())
+const onPlanImgError = (name) => {
+  const next = new Set(brokenPlanNames.value)
+  next.add(name)
+  brokenPlanNames.value = next
+}
+const planCards = computed(() => {
+  const p = latestPlan.value
+  const dest = (p?.destination || p?.planData?.destination || '').replace(/市$/, '')
+  const cards = []
+  const used = new Set()
+  const pushCard = (name, day) => {
+    if (!name || used.has(name) || cards.length >= 3) return
+    used.add(name)
+    cards.push({ day: day || '', name, image: HOME_PLAN_SAFE[name].image })
+  }
+  for (const day of (p?.planData?.dayPlans || [])) {
+    const spots = (day.timeSlots || []).map(s => stripSpotName(s.attraction)).filter(Boolean)
+    pushCard(spots.map(matchSafePlanSpot).find(Boolean), `D${day.day || ''}`)
+  }
+  if (dest) {
+    for (const [name, meta] of Object.entries(HOME_PLAN_SAFE)) {
+      if (meta.city === dest || dest.includes(meta.city)) pushCard(name, '')
+    }
+  }
+  if (cards.length) return cards
+  return [
+    { day: 'D1', name: '西湖', image: HOME_PLAN_SAFE['西湖'].image },
+    { day: 'D2', name: '灵隐寺', image: HOME_PLAN_SAFE['灵隐寺'].image },
+    { day: 'D3', name: '千岛湖', image: HOME_PLAN_SAFE['千岛湖'].image },
+  ]
+})
+const visiblePlanCards = computed(() => planCards.value.filter(c => !brokenPlanNames.value.has(c.name)))
+const planMeta = computed(() => {
+  const p = latestPlan.value
+  if (!p) return t('home.planPreviewMeta')
+  const dest = p.destination || p.planData?.destination || ''
+  const days = p.days || p.planData?.dayPlans?.length || 0
+  return dest ? t('trips.dayTrip', { dest, days: days || 1 }) : t('home.planPreviewMeta')
+})
+const loadMyPlans = async () => {
+  if (!getToken()) { myPlans.value = []; return }
   try {
-    if (!destination.value || String(destination.value).trim() === '') return showToast({ message: t('home.enterDestination'), position: 'middle' })
-    if (!budget.value || String(budget.value).trim() === '') return showToast({ message: t('home.enterBudget'), position: 'middle' })
-    if (!days.value || String(days.value).trim() === '') return showToast({ message: t('home.enterDays'), position: 'middle' })
-    if (Number(days.value) < 1) return showToast({ message: t('home.daysMin1'), position: 'middle' })
-    if (Number(budget.value) < 100) return showToast({ message: t('home.budgetMin100'), position: 'middle' })
-    if (!people.value || String(people.value).trim() === '') return showToast({ message: t('home.enterPeople'), position: 'middle' })
-    if (Number(people.value) < 1 || Number(people.value) > 50) return showToast({ message: t('home.peopleRange'), position: 'middle' })
-    showLoadingToast({ message: t('home.aiPlanning'), duration: 500, forbidClick: true, loadingType: 'spinner' })
-    clearTimeout(planningTimer)
-    planningTimer = setTimeout(() => router.push({ path: '/agent-map', query: { destination: destination.value, budget: budget.value, days: days.value, people: people.value } }), 500)
-  } catch (e) { console.error('startPlanning 失败:', e); showToast({ message: t('home.operationFailedRetry'), position: 'middle' }) }
+    const res = await planApi.getSavedPlans()
+    const list = res?.code === 0 ? (res.data || []) : []
+    myPlans.value = list
+      .filter(p => p.planData?.dayPlans?.length)
+      .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))
+  } catch { myPlans.value = [] }
+}
+const openLatestPlan = () => {
+  const p = latestPlan.value
+  if (p?.id) router.push({ path: '/agent-map', query: { savedPlanId: p.id } })
+  else goToAgentPlanner()
+}
+const goAttractionSearch = (q) => {
+  router.push(q ? { path: '/attraction-search', query: { q } } : '/attraction-search')
+}
+const goAttractionTag = async (name) => {
+  const hit = await findAttractionByName(name)
+  if (hit?.id) router.push({ path: '/attraction-detail', query: { id: hit.id } })
+  else goAttractionSearch(name)
+}
+const goTravelMap = () => { router.push('/trips') }
+const goPlanWithCity = (tag) => {
+  destination.value = tag
+  sessionStorage.setItem('selected_destination_spot', tag)
+  router.push('/agent-planner')
 }
 
 const handleQuickEntry = (entry) => {
@@ -734,12 +778,6 @@ const goToDestinations = () => {
 }
 const handleSearchSelect = (item) => { if (item?.text) destination.value = item.text; else if (item?.name) destination.value = item.name }
 const searchHistory = computed(() => hotTags.map(c => ({ text: c, url: '' })))
-const handleBannerClick = (banner) => {
-  try {
-    if (!banner || !banner.link) { showToast({ message: t('home.activityError'), position: 'middle' }); return }
-    router.push(banner.link)
-  } catch (e) { console.error('handleBannerClick 失败:', e) }
-}
 const handleExperienceClick = (exp) => {
   try { showToast({ message: t('home.featureNamedInDevelopment', { name: exp?.key ? t(`home.experiences.${exp.key}`) : t('home.thatFeature') }), position: 'middle' }) } catch (e) {}
 }
@@ -756,46 +794,27 @@ const handleCityTagClick = (city) => {
 /* Layer 2: 服务入口点击 */
 const handleServiceClick = (item) => {
   try {
-    const routes = {
-      hotel: '/hotel-booking',
-      guide: '/destinations',
-      flight: '/flight-booking',
-      train: '/orders',
-      custom: '/chat',
-      homestay: '/orders',
-      tickets: '/orders',
-      pickup: '/orders',
-      car: '/orders',
-      tour: '/orders',
+    if (!item?.ready || !item.path) {
+      showToast({ message: t('home.comingSoon'), position: 'middle', duration: 1200 })
+      return
     }
-    if (routes[item?.key]) {
-      router.push(routes[item.key])
-    } else {
-      showToast({ message: t('home.featureInDevelopment'), position: 'middle' })
-    }
+    showMoreProducts.value = false
+    router.push(item.path)
   } catch (e) { console.error('handleServiceClick 失败:', e) }
 }
 
 /* Layer 5: 快捷功能标签点击 */
 const handleQuickTab = (tab) => {
   try {
-    if (tab?.name === '行程规划') { goToAIChat() }
+    if (tab?.name === '行程规划') { goToAgentPlanner() }
+    else if (tab?.name === '地图') { goTravelMap() }
     else { showToast({ message: t('home.featureInDevelopment'), position: 'middle' }) }
   } catch (e) { console.error('handleQuickTab 失败:', e) }
 }
 
-/* Layer 6: 双列卡片点击 */
-const handleEventBannerClick = () => {
-  try { router.push(eventBanner.value.link) } catch (e) { console.error('handleEventBannerClick 失败:', e) }
-}
-
-const handleCitySeedClick = () => {
-  try { goToAIChat() } catch (e) { console.error('handleCitySeedClick 失败:', e) }
-}
-
 /* Layer 3: 更多产品点击 */
-const handleMoreProductClick = (product) => {
-  try { showToast({ message: t('home.featureNamedInDevelopment', { name: product?.key ? t(`home.products.${product.key}`) : t('home.thatFeature') }), position: 'middle' }) } catch (e) {}
+const handleMoreProductClick = () => {
+  showToast({ message: t('home.comingSoon'), position: 'middle', duration: 1200 })
 }
 
 /* 【悬浮按钮】点击防抖：500ms内重复点击忽略，避免快速跳转多次 */
@@ -814,6 +833,13 @@ const onCityConfirm = (value) => {
 }
 
 const openCityPicker = () => { showCityPicker.value = true }
+const openAttractionSelect = () => { router.push('/attraction-select') }
+const applySelectedDestination = () => {
+  const spot = sessionStorage.getItem('selected_destination_spot')
+  if (!spot) return
+  destination.value = spot
+  sessionStorage.removeItem('selected_destination_spot')
+}
 
 /* ==================== 城市选择器滚轮 ==================== */
 const wheelGesture = new WeakMap()
@@ -871,7 +897,10 @@ watch(showCityPicker, (newVal) => {
 })
 
 /* ==================== 滚动触底加载（和社区页一致） ==================== */
+const { trigger: topbarTrigger, visible: homeTopbarVisible, update: updateHomeTopbar } = useStickyAfterTrigger()
+
 const handleScroll = () => {
+  updateHomeTopbar()
   const scrollTop = window.pageYOffset || document.documentElement.scrollTop
   const scrollHeight = document.documentElement.scrollHeight
   const clientHeight = window.innerHeight
@@ -885,13 +914,15 @@ let hasLoadedOnce = false
 
 onMounted(async () => {
   await loadStaticImageMap()
-  loadBanners(); loadHotDestinations(); loadExperiences()
+  loadHotDestinations(); loadExperiences()
   loadNotes(true).then(() => { hasLoadedOnce = true })
-  // 滚动监听统一在 onActivated 注册（keep-alive 首挂载会触发 onActivated，避免重复注册）
+  applySelectedDestination()
+  loadMyPlans()
 })
 
 onActivated(() => {
-  // keep-alive 缓存恢复，数据不重新加载
+  applySelectedDestination()
+  loadMyPlans()
   window.addEventListener('scroll', handleScroll, { passive: true })
 })
 
@@ -902,7 +933,6 @@ onDeactivated(() => {
 
 onUnmounted(() => {
   window.removeEventListener('scroll', handleScroll)
-  clearTimeout(planningTimer); planningTimer = null
 })
 </script>
 
@@ -911,358 +941,149 @@ onUnmounted(() => {
 
     <!-- 漂浮云朵粒子 — 已禁用（GPU消耗过高） -->
 
+    <header class="home-topbar" :class="{ visible: homeTopbarVisible }" :aria-hidden="!homeTopbarVisible" :inert="!homeTopbarVisible">
+      <button type="button" class="home-topbar-search" @click="goAttractionSearch()">
+        <van-icon name="search" size="18" />
+        <span>{{ t('attraction.searchPlaceholder') }}</span>
+      </button>
+      <nav class="home-topbar-actions" :aria-label="t('home.services')">
+        <button v-for="tab in quickTabs" :key="tab.name" type="button" class="home-topbar-action" @click="handleQuickTab(tab)">
+          <van-icon :name="tab.icon" size="18" />
+          <span>{{ tab.shortName }}</span>
+        </button>
+      </nav>
+    </header>
+
     <!-- ==================== LAYER 1: Hero Header ==================== -->
     <div class="hero-header entrance-item entrance-d1">
-      <!-- 全屏山水背景图 -->
       <img
         class="hero-bg-img"
-        src="https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=1920&q=85"
+        :src="heroImage"
         alt=""
+        @error="onCoverError"
       />
-      <!-- 底部渐变遮罩，保证白色文字可读 -->
       <div class="hero-overlay"></div>
-
-      <!-- 左下：主文案区 -->
       <div class="hero-text-area">
         <h1 class="hero-title">旅迹</h1>
-        <p class="hero-sub-en">TRAVEL TRACE</p>
         <p class="hero-tagline">{{ t('home.heroTagline') }}</p>
       </div>
-
-      <!-- 右下：两个磨砂半透按钮 -->
-      <div class="hero-actions-right">
-        <button class="hero-glass-btn-right" @click="handleHeaderBtn('vip')">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="3" y="3" width="18" height="18" rx="3"/>
-          </svg>
-          <span>{{ t('home.vip') }}</span>
-        </button>
-        <button class="hero-glass-btn-right" @click="handleHeaderBtn('points')">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"/>
-          </svg>
-          <span>{{ t('home.points') }}</span>
-        </button>
-      </div>
     </div>
 
-    <!-- ==================== AI 智能规划 ==================== -->
-    <div class="content-card plan-card">
-      <!-- 标题 -->
-      <div class="plan-header">
-        <span class="plan-icon-wrap">🧭</span>
-        <div class="plan-header-text">
-          <span class="plan-title">{{ t('home.planTitle') }}</span>
-          <span class="plan-subtitle">{{ t('home.planSubtitle') }}</span>
-        </div>
+    <section class="planner-card" aria-labelledby="planner-title">
+      <div class="planner-eyebrow">
+        <span class="planner-badge"><van-icon name="guide-o" size="14" /> AI TRIP PLANNER</span>
+        <span class="planner-kicker">{{ t('home.plannerKicker') }}</span>
       </div>
-
-      <!-- 目的地搜索 — 核心输入 -->
-      <div class="plan-search-row">
-        <div class="plan-search-wrap">
-          <SearchBar v-model="destination" :placeholder="t('home.searchDestinationPlaceholder')" :history="searchHistory" @select="handleSearchSelect" />
-        </div>
-        <button class="plan-loc-btn" @click="openCityPicker">
-          <van-icon name="location-o" size="18" color="#7C3AED" />
+      <h2 id="planner-title">{{ t('home.plannerHeadline') }}</h2>
+      <p class="planner-description">{{ t('home.plannerDescription') }}</p>
+      <div class="planner-features">
+        <span><van-icon name="location-o" /> {{ t('home.plannerRoute') }}</span>
+        <span><van-icon name="calendar-o" /> {{ t('home.plannerSchedule') }}</span>
+        <span><van-icon name="balance-o" /> {{ t('home.plannerBudget') }}</span>
+      </div>
+      <button type="button" class="planner-cta" @click="goToAgentPlanner">{{ t('home.startPlanning') }} <van-icon name="arrow" size="16" /></button>
+      <div v-if="latestPlan" class="saved-plan">
+        <button type="button" class="saved-plan-link" @click="openLatestPlan">
+          <span><span class="saved-plan-label">{{ t('home.continuePlan') }}</span>{{ planMeta }}</span><van-icon name="arrow" />
+        </button>
+        <button v-if="visiblePlanCards.length" type="button" class="plan-preview" :class="'n-' + visiblePlanCards.length" :aria-label="t('home.continuePlan')" @click="openLatestPlan">
+          <span v-for="card in visiblePlanCards" :key="card.day + card.name" class="plan-photo">
+            <img :src="card.image" :alt="card.name" class="plan-photo-img" loading="lazy" decoding="async" @error="onPlanImgError(card.name)" />
+            <span v-if="card.day" class="plan-photo-day">{{ card.day }}</span><span class="plan-photo-name">{{ card.name }}</span>
+          </span>
         </button>
       </div>
+    </section>
 
-      <!-- 热门目的地快捷选择 -->
-      <div class="hot-tags">
-        <span
-          v-for="tag in hotTags" :key="'ht-' + tag"
-          class="hot-tag"
-          :class="{ active: destination === tag }"
-          @click="selectHotTag(tag)"
-        >{{ tag }}</span>
-      </div>
-
-      <!-- 预算/天数/人数 — 轻量选择器 -->
-      <div class="plan-meta-row">
-        <div class="plan-meta-item" :class="{ filled: budget }">
-          <span class="plan-meta-label">{{ t('home.budget') }}</span>
-          <input ref="budgetInputRef" :value="budget || undefined" type="text" inputmode="decimal" :placeholder="t('home.unlimited')" class="plan-meta-input" @input="handleBudgetInput" @blur="handleBudgetBlur" />
-          <span v-if="budget" class="plan-meta-unit">{{ t('common.yuan') }}</span>
-        </div>
-        <div class="plan-meta-item" :class="{ filled: days }">
-          <span class="plan-meta-label">{{ t('home.days') }}</span>
-          <input ref="daysInputRef" :value="days" type="text" inputmode="numeric" :placeholder="t('home.unlimited')" class="plan-meta-input" @input="handleDaysInput" @blur="handleDaysBlur" />
-          <span v-if="days" class="plan-meta-unit">{{ t('common.days') }}</span>
-        </div>
-        <div class="plan-meta-item" :class="{ filled: people }">
-          <span class="plan-meta-label">{{ t('home.people') }}</span>
-          <input ref="peopleInputRef" :value="people" type="text" inputmode="numeric" :placeholder="t('home.unlimited')" class="plan-meta-input" @input="handlePeopleInput" @blur="handlePeopleBlur" />
-          <span v-if="people" class="plan-meta-unit">{{ t('common.people') }}</span>
-        </div>
-      </div>
-
-      <!-- 提交按钮 -->
-      <button class="plan-submit btn-tap-scale" @click="startPlanning">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 2l9 4.5v3.8c0 5.3-3.5 10.2-9 11.7-5.5-1.5-9-6.4-9-11.7V6.5L12 2z"/></svg>
-        <span>{{ t('home.startPlanning') }}</span>
+    <section class="section-card travel-services" :aria-label="t('home.services')">
+      <button type="button" class="spot-search-bar" @click="goAttractionSearch()">
+        <van-icon name="search" size="18" /><span class="spot-search-ph">{{ t('attraction.searchPlaceholder') }}</span><van-icon name="arrow" size="12" />
       </button>
-    </div>
-
-    <!-- ==================== Banner 轮播 ==================== -->
-    <div class="content-card banner-wrap">
-      <Swipe class="banner-swipe" :autoplay="4000" indicator-color="rgba(255,255,255,0.65)" indicator-active-color="#ffffff" :circular="true">
-        <SwipeItem v-for="banner in banners" :key="'bn-' + banner.id" class="banner-slide" @click="handleBannerClick(banner)">
-          <img :src="banner.image" :alt="banner.title" class="banner-img" loading="lazy" decoding="async" @error="e=>e.target.style.opacity='0'" />
-          <div class="banner-info">
-            <span class="banner-name">{{ banner.title }}</span>
-            <span class="banner-slogan">{{ t(banner.subtitle) }}</span>
-          </div>
-        </SwipeItem>
-      </Swipe>
-    </div>
-
-    <!-- ==================== 服务入口：双行合并 ==================== -->
-    <div class="section-card">
+      <span ref="topbarTrigger" class="home-topbar-trigger" aria-hidden="true" />
+      <div class="spot-search-tags">
+        <button v-for="tag in spotSearchTags.slice(0, 4)" :key="tag" type="button" class="spot-search-tag" @click="goAttractionTag(tag)">{{ tag }}</button>
+      </div>
       <div class="service-grid">
-        <div v-for="(item, idx) in serviceRow1" :key="'s1-'+idx" class="service-item" @click="handleServiceClick(item)">
-          <div class="service-icon-circle" :style="{ background: `${item.color}15` }">
-            <van-icon :name="item.icon" :color="item.color" size="22" />
-          </div>
+        <button v-for="item in serviceRow1" :key="item.key" type="button" class="service-item" @click="handleServiceClick(item)">
+          <span class="service-icon-circle"><svg viewBox="0 0 24 24" aria-hidden="true"><path :d="item.icon" /></svg></span>
           <span class="service-label">{{ t('home.serviceItems.' + item.key) }}</span>
-        </div>
-        <div v-for="(item, idx) in serviceRow2" :key="'s2-'+idx" class="service-item" @click="handleServiceClick(item)">
-          <div class="service-icon-circle" :style="{ background: `${item.color}12` }">
-            <van-icon :name="item.icon" :color="item.color" size="20" />
-          </div>
-          <span class="service-label">{{ t('home.serviceItems.' + item.key) }}</span>
-        </div>
+        </button>
+        <button type="button" class="service-item" @click="showMoreProducts = true">
+          <span class="service-icon-circle"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg></span>
+          <span class="service-label">{{ t('home.moreServices') }}</span>
+        </button>
       </div>
-      <!-- 更多 -->
-      <div class="more-products-bar" @click="showMoreProducts = true">
-        <div class="more-products-left">
-          <div class="mini-icon-row">
-            <span class="mini-icon" style="background:#ede9fe;color:#8B5CF6;">签</span>
-            <span class="mini-icon" style="background:#dbeafe;color:#3B82F6;">导</span>
-            <span class="mini-icon" style="background:#fef3c7;color:#F59E0B;">W</span>
-            <span class="mini-icon" style="background:#d1fae5;color:#34D399;">保</span>
-          </div>
-          <span class="more-products-text">{{ t('home.moreProducts') }}</span>
-        </div>
-        <van-icon name="arrow" size="14" color="var(--text-hint)" />
-      </div>
-    </div>
+    </section>
 
-    <!-- ==================== 热门目的地 ==================== -->
-    <div class="section-card">
+    <section class="dest-section" aria-labelledby="destinations-title">
       <div class="sec-head">
-        <span class="sec-title">🔥 {{ t('home.hotDestinations') }}</span>
-        <span class="sec-more" @click="goToDestinations">{{ t('common.viewAll') }} <van-icon name="arrow" size="12" /></span>
+        <div><h2 id="destinations-title" class="sec-title">{{ t('home.hotDestinations') }}</h2><p class="sec-caption">{{ t('home.destinationCaption') }}</p></div>
+        <button type="button" class="sec-more" @click="goToDestinations">{{ t('common.viewAll') }} <van-icon name="arrow" size="12" /></button>
       </div>
       <div class="h-scroll">
-        <div v-for="(d, i) in hotDestinations" :key="'hd-'+i" class="dest-card" @click="handleDestination(d)">
-          <img :src="d.image" :alt="d.name" class="dest-img" loading="lazy" decoding="async" @error="e=>e.target.style.opacity='0'" />
-          <div class="dest-mask" />
-          <span class="dest-name">{{ d.name }}</span>
-        </div>
+        <button v-for="d in hotDestinations" :key="d.name" type="button" class="dest-card" @click="handleDestination(d)">
+          <img :src="d.image" :alt="d.name" class="dest-img" loading="lazy" decoding="async" @error="onCoverError" />
+          <span class="dest-mask" /><span class="dest-name">{{ d.name }}</span><span v-if="d.tag" class="dest-tag">{{ d.tag }}</span>
+        </button>
       </div>
-    </div>
+    </section>
 
-    <!-- ==================== 双列活动卡片 ==================== -->
-    <div class="dual-cards-scroll entrance-item entrance-d3">
-      <div class="event-card" @click="handleEventBannerClick">
-        <img :src="eventBanner.image" :alt="eventBanner.title" class="event-img" loading="lazy" decoding="async" @error="e=>e.target.style.opacity='0'" />
-        <div class="event-overlay">
-          <span class="event-badge">{{ t(eventBanner.label) }}</span>
-          <span class="event-title">{{ t(eventBanner.title) }}</span>
-        </div>
+    <section class="ctrip-section" aria-labelledby="inspiration-title">
+      <div class="sec-head">
+        <div><h2 id="inspiration-title" class="sec-title">{{ t('home.inspirationTitle') }}</h2><p class="sec-caption">{{ t('home.inspirationCaption') }}</p></div>
+        <button type="button" class="sec-more" @click="goToCommunity">{{ t('common.viewAll') }} <van-icon name="arrow" size="12" /></button>
       </div>
-      <div class="city-card" @click="handleCitySeedClick">
-        <img :src="citySeedCard.image" :alt="citySeedCard.label" class="city-img" loading="lazy" decoding="async" @error="e=>e.target.style.opacity='0'" />
-        <div class="city-overlay">
-          <span class="city-badge">{{ t(citySeedCard.label) }}</span>
-          <span class="city-cta">{{ t(citySeedCard.cta) }}</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- ==================== 携程风格：优质游记（复刻社区功能） ==================== -->
-    <div class="ctrip-section">
-      <!-- 笔记 Feed -->
       <div class="ctrip-feed">
-        <!-- 左列 -->
-        <div class="ctrip-feed-column">
-          <!-- 自动翻页宣传卡片（矮卡片 → 左列更高） -->
-          <div class="ctrip-promotion-card">
-            <Swipe :autoplay="3000" indicator-color="rgba(255,255,255,0.65)" indicator-active-color="#ffffff" :circular="true" style="height:150px;border-radius:12px;overflow:hidden;">
-              <SwipeItem v-for="(slide, i) in promotionSlides" :key="'promo-'+i">
-                <div class="ctrip-promo-slide">
-                  <img :src="slide.image" class="ctrip-promo-img" loading="lazy" @error="e => { e.target.src = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22400%22 height=%22300%22><rect fill=%22%23e2e8f0%22 width=%22400%22 height=%22300%22/><text fill=%22%2394a3b8%22 font-size=%2220%22 font-family=%22sans-serif%22 x=%22200%22 y=%22150%22 text-anchor=%22middle%22 dominant-baseline=%22middle%22>' + encodeURIComponent(slide.title) + '</text></svg>') }" />
-                  <div class="ctrip-promo-mask" />
-                  <div class="ctrip-promo-tag">{{ t(slide.tag) }}</div>
-                  <div class="ctrip-promo-title">{{ t(slide.title) }}</div>
-                  <div class="ctrip-promo-subtitle">{{ t(slide.subtitle) }}</div>
-                </div>
-              </SwipeItem>
-            </Swipe>
-          </div>
-
-          <template v-if="notesLoading">
-            <div class="ctrip-skeleton-card" v-for="i in 3" :key="'ctrip-sk-left-'+i" :style="{ '--aspect': i % 2 === 0 ? '4/3' : '1/1' }">
-              <div class="ctrip-sk-image"></div>
-              <div class="ctrip-sk-info"><van-skeleton :row="1" /></div>
-            </div>
-          </template>
-          <template v-else>
-            <div
-              class="ctrip-note-card"
-              v-for="(note, colIndex) in leftColumnNotes"
-              :key="note.id"
-              @click="goToDetail(note)"
-            >
-              <!-- 卡片封面 -->
-              <div class="ctrip-card-image-wrapper aspect-3-4">
-                <!-- 视频：用 <video> 加载第一帧作为封面（和社区页一致） -->
-                <video
-                  v-if="note.hasVideo && note.videoUrl"
-                  :src="note.videoUrl"
-                  class="ctrip-card-main-img"
-                  preload="metadata"
-                  muted
-                  playsinline
-                  @loadedmetadata="(e) => { const v = e.target; v.currentTime = 0.1; }"
-                  @seeked="(e) => { e.target.pause(); }"
-                ></video>
-                <!-- 图片 -->
-                <img
-                  v-else-if="getNoteCoverImage(note)"
-                  :src="getNoteCoverImage(note)"
-                  class="ctrip-card-main-img"
-                  loading="lazy"
-                />
-                <!-- 占位 -->
-                <div v-else class="ctrip-card-placeholder"></div>
-
-                <!-- 视频播放标识 -->
-                <div v-if="note.hasVideo" class="ctrip-video-play-overlay">
-                  <van-icon name="play" size="16" color="rgba(255,255,255,0.95)" />
-                </div>
-
-                <!-- 标签 -->
-                <div v-if="note.tag" class="ctrip-card-tag">{{ note.tag }}</div>
-              </div>
-
-              <div class="ctrip-card-body">
-                <div class="ctrip-card-title" :title="note.title || note.content">{{ note.title || note.content }}</div>
-                <div class="ctrip-card-footer">
-                  <div class="ctrip-card-author">
-                    <van-image round width="18" height="18" :src="note.author.avatar" fit="cover" />
-                    <span>{{ note.author.nickname }}</span>
-                  </div>
-                  <div class="ctrip-card-views">
-                    <van-icon name="eye-o" size="12" color="var(--text-hint)" />
-                    <span>{{ formatNumber(note.viewCount) }}{{ t('home.views') }}</span>
-                  </div>
+        <div v-for="(column, columnIndex) in noteColumns" :key="columnIndex" class="ctrip-feed-column">
+        <div v-if="columnIndex === 0" class="ctrip-promotion-card" role="region" aria-roledescription="carousel" :aria-label="t('home.inspirationTitle')">
+          <Swipe class="ctrip-promo-swipe" :autoplay="3000" indicator-color="#fff" :circular="true">
+            <SwipeItem v-for="slide in promotionSlides" :key="slide.title">
+              <div class="ctrip-promo-slide">
+                <img :src="slide.image" :alt="t(slide.title)" class="ctrip-promo-img" loading="lazy" decoding="async" @error="onCoverError" />
+                <div class="ctrip-promo-mask" />
+                <span class="ctrip-promo-tag">{{ t(slide.tag) }}</span>
+                <div class="ctrip-promo-copy">
+                  <h3>{{ t(slide.title) }}</h3>
+                  <p>{{ t(slide.subtitle) }}</p>
                 </div>
               </div>
-            </div>
-          </template>
+            </SwipeItem>
+          </Swipe>
         </div>
-
-        <!-- 右列 -->
-        <div class="ctrip-feed-column">
-          <template v-if="notesLoading">
-            <div class="ctrip-skeleton-card" v-for="i in 3" :key="'ctrip-sk-right-'+i" :style="{ '--aspect': i % 2 === 0 ? '1/1' : '4/3' }">
-              <div class="ctrip-sk-image"></div>
-              <div class="ctrip-sk-info"><van-skeleton :row="1" /></div>
+        <template v-if="notesLoading">
+        <div v-for="i in 2" :key="i" class="ctrip-skeleton-card" aria-hidden="true"><div class="ctrip-sk-image"></div><div class="ctrip-sk-info"><van-skeleton :row="2" /></div></div>
+        </template>
+        <template v-else>
+        <article v-for="note in column" :key="note.id" class="ctrip-note-card" role="link" tabindex="0" :aria-label="note.title || note.content" @click="goToDetail(note)" @keydown.enter="goToDetail(note)">
+          <div class="ctrip-card-image-wrapper">
+            <img v-if="getNoteCoverImage(note)" :src="getNoteCoverImage(note)" :alt="note.title || note.tag" class="ctrip-card-main-img" loading="lazy" decoding="async" @error="onCoverError" />
+            <video v-else-if="note.hasVideo && note.videoUrl" :src="note.videoUrl" class="ctrip-card-main-img" preload="metadata" muted playsinline @loadedmetadata="e => { e.target.currentTime = 0.1 }" @seeked="e => e.target.pause()" />
+            <img v-else :src="coverPlaceholder" alt="" class="ctrip-card-main-img" loading="lazy" />
+            <span v-if="note.hasVideo" class="ctrip-video-play-overlay"><van-icon name="play" size="16" color="white" /></span>
+            <span v-if="note.tag" class="ctrip-card-tag">{{ note.tag }}</span>
+          </div>
+          <div class="ctrip-card-body">
+            <div class="ctrip-card-title" :title="note.title || note.content">{{ note.title || note.content }}</div>
+            <div class="ctrip-card-footer">
+              <div class="ctrip-card-author"><van-image round width="18" height="18" :src="note.author.avatar" fit="cover" /><span>{{ note.author.nickname }}</span></div>
+              <span class="ctrip-card-views"><van-icon name="eye-o" size="12" /><span>{{ formatNumber(note.viewCount) }}</span></span>
             </div>
-          </template>
-          <template v-else>
-            <div
-              class="ctrip-note-card"
-              v-for="(note, colIndex) in rightColumnNotes"
-              :key="note.id"
-              @click="goToDetail(note)"
-            >
-              <!-- 卡片封面 -->
-              <div class="ctrip-card-image-wrapper aspect-3-4">
-                <!-- 视频：用 <video> 加载第一帧作为封面（和社区页一致） -->
-                <video
-                  v-if="note.hasVideo && note.videoUrl"
-                  :src="note.videoUrl"
-                  class="ctrip-card-main-img"
-                  preload="metadata"
-                  muted
-                  playsinline
-                  @loadedmetadata="(e) => { const v = e.target; v.currentTime = 0.1; }"
-                  @seeked="(e) => { e.target.pause(); }"
-                ></video>
-                <!-- 图片 -->
-                <img
-                  v-else-if="getNoteCoverImage(note)"
-                  :src="getNoteCoverImage(note)"
-                  class="ctrip-card-main-img"
-                  loading="lazy"
-                />
-                <!-- 占位 -->
-                <div v-else class="ctrip-card-placeholder"></div>
-
-                <!-- 视频播放标识 -->
-                <div v-if="note.hasVideo" class="ctrip-video-play-overlay">
-                  <van-icon name="play" size="16" color="rgba(255,255,255,0.95)" />
-                </div>
-
-                <!-- 标签 -->
-                <div v-if="note.tag" class="ctrip-card-tag">{{ note.tag }}</div>
-              </div>
-
-              <div class="ctrip-card-body">
-                <div class="ctrip-card-title" :title="note.title || note.content">{{ note.title || note.content }}</div>
-                <div class="ctrip-card-footer">
-                  <div class="ctrip-card-author">
-                    <van-image round width="18" height="18" :src="note.author.avatar" fit="cover" />
-                    <span>{{ note.author.nickname }}</span>
-                  </div>
-                  <div class="ctrip-card-views">
-                    <van-icon name="eye-o" size="12" color="var(--text-hint)" />
-                    <span>{{ formatNumber(note.viewCount) }}{{ t('home.views') }}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </template>
+          </div>
+        </article>
+        </template>
         </div>
       </div>
-
-      <!-- 加载更多/没有更多（全宽居中） -->
+      <EmptyState v-if="empty" :title="t('home.noStories')" icon="photo-o" />
       <div class="ctrip-feed-footer">
         <div v-if="loadingMore" class="ctrip-loading-more"><van-loading size="20" color="#8B5CF6" /><span>{{ t('common.loading') }}</span></div>
         <div v-else-if="!hasMore && notes.length > 0" class="ctrip-no-more">— {{ t('common.noMore') }} —</div>
       </div>
+    </section>
 
-      <!-- 城市选择器弹窗 -->
-      <van-popup
-        v-model:show="showCommunityCityPicker"
-        position="bottom"
-        round
-        :style="{ borderRadius: '20px 20px 0 0' }"
-      >
-        <van-picker
-          :columns="cityColumns"
-          :default-index="cityColumns.findIndex(c => c.value === currentCity)"
-          @confirm="onCommunityCityConfirm"
-          @cancel="showCommunityCityPicker = false"
-          :title="t('home.selectCity')"
-        />
-      </van-popup>
-    </div>
-
-    <!-- Bottom spacer for floating bar -->
-    <div class="bottom-spacer" />
-
-    <!-- ==================== LAYER 7: Bottom Floating AI Input Bar ==================== -->
     <Transition name="fab-pop">
-      <button v-if="!showAIChat" class="fab-ai-btn" @click="goToAIChat">
-        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#7C3AED" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" fill="#7C3AED" fill-opacity="0.15"/>
-          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
-          <circle cx="18" cy="5" r="1.5" fill="#A78BFA" stroke="none"/>
-          <circle cx="6" cy="19" r="1.5" fill="#A78BFA" stroke="none"/>
-        </svg>
+      <button v-if="!showAIChat && !showMoreProducts && !showCityPicker" type="button" class="fab-ai-btn" :aria-label="t('home.askAI')" @click="goToAIChat">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.6 6.4L21 12l-6.4 2.6L12 21l-2.6-6.4L3 12l6.4-2.6L12 3Z" /><path d="M20 2v4M18 4h4" /></svg>
+        <span>{{ t('home.askAI') }}</span>
       </button>
     </Transition>
 
@@ -1275,20 +1096,34 @@ onUnmounted(() => {
     <!-- ==================== 更多产品 VanPopup ==================== -->
     <van-popup v-model:show="showMoreProducts" position="bottom" round safe-area-inset-bottom :style="{ maxHeight: '60vh' }">
       <div class="more-popup-header">
-        <span class="more-popup-title">{{ t('home.moreProductsTitle') }}</span>
+        <span class="more-popup-title">{{ t('home.moreServices') }}</span>
         <van-icon name="cross" size="20" color="var(--text-hint)" @click="showMoreProducts = false" />
       </div>
       <div class="more-popup-grid">
         <div
+          v-for="(item, idx) in serviceRow2"
+          :key="'ms-' + idx"
+          class="more-popup-item"
+          :class="{ pending: !item.ready }"
+          @click="handleServiceClick(item)"
+        >
+          <div class="more-popup-icon" :class="item.ready ? 'is-ready' : 'is-pending'">
+            <van-icon :name="item.icon" :color="item.ready ? '#8B5CF6' : '#94A3B8'" size="22" />
+          </div>
+          <span class="more-popup-label">{{ t('home.serviceItems.' + item.key) }}</span>
+          <span v-if="!item.ready" class="service-soon">{{ t('home.comingSoon') }}</span>
+        </div>
+        <div
           v-for="(product, idx) in moreProductList"
           :key="'mp-' + idx"
-          class="more-popup-item"
-          @click="handleMoreProductClick(product)"
+          class="more-popup-item pending"
+          @click="handleMoreProductClick"
         >
-          <div class="more-popup-icon" :style="{ background: `${product.color}14` }">
-            <van-icon :name="product.icon" :color="product.color" size="22" />
+          <div class="more-popup-icon is-pending">
+            <van-icon :name="product.icon" color="#94A3B8" size="22" />
           </div>
           <span class="more-popup-label">{{ t('home.products.' + product.key) }}</span>
+          <span class="service-soon">{{ t('home.comingSoon') }}</span>
         </div>
       </div>
     </van-popup>
@@ -1306,9 +1141,6 @@ onUnmounted(() => {
   --primary: #8B5CF6;
   --primary-2: #6366F1;
   --primary-3: #5B8DEF;
-  --text-primary: var(--text-primary);
-  --text-secondary: var(--text-secondary);
-  --text-hint: var(--text-hint);
   --card-bg: rgba(255, 255, 255, 0.58);
   --card-radius: 18px;
   --card-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
@@ -1318,22 +1150,164 @@ onUnmounted(() => {
   --float-bar-gap: 8px;
 
   width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
   min-height: 100vh;
   background: transparent;
   padding-bottom: calc(10px + 48px + 60px + var(--safe-area-bottom, 0px));
 }
 
 /* ==================== LAYER 1: Hero — 山水大图卡片 ==================== */
+.page-shell button {
+  font-family: inherit;
+  cursor: pointer;
+}
+.page-shell button:focus-visible,
+.ctrip-note-card:focus-visible {
+  outline: 3px solid #8b5cf6;
+  outline-offset: 4px;
+}
+.home-topbar {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  z-index: 1000;
+  width: min(100%, 720px);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 56px;
+  padding: calc(env(safe-area-inset-top, 0px) + 7px) 8px 7px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate3d(-50%, -100%, 0);
+  transition: opacity 0.3s ease, transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  border-bottom: 0.5px solid rgba(0, 0, 0, 0.06);
+}
+.home-topbar.visible { opacity: 1; pointer-events: auto; transform: translate3d(-50%, 0, 0); }
+.home-topbar-search {
+  flex: 1 1 96px;
+  min-width: 82px;
+  height: 40px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 20px;
+  background: #f3f1f6;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.home-topbar-search span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.home-topbar-actions { flex: 0 1 240px; min-width: 210px; display: grid; grid-template-columns: repeat(6, minmax(34px, 1fr)); }
+.home-topbar-action { min-width: 0; padding: 1px 0; border: 0; background: transparent; color: #7c3aed; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 9px; line-height: 1.1; }
+.home-topbar-action:nth-child(2) { color: #6366f1; }
+.home-topbar-action:nth-child(3) { color: #0ea5e9; }
+.home-topbar-action:nth-child(4) { color: #f59e0b; }
+.home-topbar-action:nth-child(5) { color: #b45309; }
+.home-topbar-action:nth-child(6) { color: #f97316; }
+.home-topbar-trigger { display: block; width: 1px; height: 1px; }
+html[data-theme='dark'] .home-topbar { background: rgba(24, 27, 40, 0.9); border-bottom-color: rgba(255,255,255,0.06); }
+html[data-theme='dark'] .home-topbar-search { background: rgba(255,255,255,0.08); }
+.planner-card {
+  position: relative;
+  z-index: 2;
+  margin: -22px 16px 16px;
+  padding: 22px;
+  border: 1px solid #e8ddfb;
+  border-radius: 24px;
+  background: linear-gradient(130deg, #fff 20%, #f3edff);
+  box-shadow: 0 8px 28px rgba(83, 47, 142, 0.08);
+}
+.planner-eyebrow, .planner-features, .saved-plan-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.planner-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #7445c0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+.planner-kicker { font-size: 11px; color: var(--text-secondary); }
+#planner-title { margin: 14px 0 8px; font-size: 25px; line-height: 1.35; letter-spacing: -0.5px; color: var(--text-primary); }
+.planner-description { margin: 0; color: var(--text-secondary); font-size: 13px; line-height: 1.8; }
+.planner-features { justify-content: flex-start; flex-wrap: wrap; gap: 10px 18px; margin: 16px 0 20px; color: #6e5b87; font-size: 12px; }
+.planner-features span { display: inline-flex; align-items: center; gap: 4px; }
+.page-shell .planner-cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 48px;
+  padding: 12px;
+  border: 0;
+  border-radius: 14px;
+  background: linear-gradient(110deg, #8755e7, #7040ca);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  box-shadow: 0 5px 12px rgba(112, 64, 202, 0.18);
+  transition: transform 0.2s;
+}
+.planner-cta:active { transform: scale(0.98); }
+.saved-plan { margin-top: 16px; padding-top: 14px; border-top: 1px solid rgba(139, 92, 246, 0.15); }
+.saved-plan-link { width: 100%; padding: 0 0 12px; border: 0; background: none; text-align: left; font-size: 12px !important; }
+.saved-plan-label { display: block; margin-bottom: 4px; font-weight: 600; color: #7445c0; }
+.saved-plan .plan-preview { width: 100%; border: 0; padding: 0; background: none; height: 110px; }
+.travel-services.section-card { margin: 0 16px 26px; padding: 16px; background: var(--bg-card-solid, #fff); border: 1px solid rgba(139, 92, 246, 0.06); box-shadow: none; }
+.travel-services .spot-search-bar { width: 100%; height: 44px; border: 1px solid rgba(139, 92, 246, 0.1); background: #f7f5fb; color: #817294; border-radius: 12px; text-align: left; }
+.travel-services .spot-search-ph { color: var(--text-secondary); font-size: 13px; }
+.travel-services .spot-search-tags { gap: 6px; margin-top: 8px; }
+.travel-services .spot-search-tag { border: 0; background: none; padding: 4px 8px; min-height: 28px; color: var(--text-secondary); font-size: 11px; }
+.travel-services .service-grid { padding: 16px 0 0; margin-top: 10px; border-top: 1px solid rgba(139, 92, 246, 0.08); gap: 10px; }
+.service-item { padding: 0; border: 0; background: none; min-width: 0; }
+.service-icon-circle { background: #f1ebfa; color: #8053bb; }
+.service-icon-circle svg { width: 23px; height: 23px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.sec-head .sec-title { margin: 0; font-size: 18px; line-height: 1.4; }
+.sec-caption { margin: 5px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.page-shell .sec-more { min-height: 40px; padding: 0; border: 0; background: none; color: #756781; font-size: 12px; white-space: nowrap; }
+.dest-section .h-scroll { padding-right: 16px; padding-bottom: 8px; scroll-snap-type: x proximity; }
+.dest-section .dest-card { padding: 0; border: 0; text-align: left; scroll-snap-align: start; width: 145px; height: 180px; border-radius: 16px; }
+.dest-section .dest-name { font-size: 20px; }
+.ctrip-section { margin-top: 22px; }
+.ctrip-note-card { border: 1px solid rgba(139, 92, 246, 0.06); }
+.ctrip-card-footer { color: var(--text-secondary); }
+html[data-theme='dark'] .planner-card { background: linear-gradient(130deg, #242034, #2d2340); border-color: #49325f; }
+html[data-theme='dark'] .planner-badge,
+html[data-theme='dark'] .planner-features,
+html[data-theme='dark'] .saved-plan-label,
+html[data-theme='dark'] .sec-more { color: #c4b5fd; }
+html[data-theme='dark'] .service-icon-circle { background: #352a46; color: #c4b5fd; }
+@media (max-width: 360px) {
+  .planner-card { padding: 18px; }
+  #planner-title { font-size: 23px; }
+  .planner-features { gap: 10px; font-size: 11px; }
+  .planner-kicker { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .page-shell *, .page-shell *::before, .page-shell *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+
 .hero-header {
   position: relative;
-  aspect-ratio: 8 / 5;
+  height: 190px;
   margin: 0;
   border-radius: 0 0 22px 22px;
   overflow: hidden;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.12);
 }
 
-/* 全屏山水背景 */
 .hero-bg-img {
   position: absolute;
   inset: 0;
@@ -1343,26 +1317,24 @@ onUnmounted(() => {
   display: block;
 }
 
-/* 底部渐变遮罩 — 保证白色文字可读 */
 .hero-overlay {
   position: absolute;
   inset: 0;
   background: linear-gradient(
     180deg,
-    rgba(0,0,0,0.05) 0%,
-    rgba(0,0,0,0.02) 30%,
-    rgba(0,0,0,0.15) 65%,
-    rgba(0,0,0,0.45) 100%
+    rgba(0,0,0,0.22) 0%,
+    rgba(0,0,0,0.02) 38%,
+    rgba(0,0,0,0.16) 70%,
+    rgba(0,0,0,0.42) 100%
   );
   pointer-events: none;
   z-index: 1;
 }
 
-/* 左下：竖向主文案 */
 .hero-text-area {
   position: absolute;
-  left: 20px;
-  bottom: 28px;
+  left: 16px;
+  bottom: 38px;
   z-index: 2;
   display: flex;
   flex-direction: column;
@@ -1370,41 +1342,31 @@ onUnmounted(() => {
 }
 
 .hero-title {
-  font-size: 48px;
-  font-weight: 900;
+  font-size: 30px;
+  font-weight: 800;
   color: #fff;
   line-height: 1;
-  margin: 0;
-  letter-spacing: 4px;
-  text-shadow: 0 2px 12px rgba(0,0,0,0.3);
-}
-
-.hero-sub-en {
-  font-size: 11px;
-  font-weight: 500;
-  color: rgba(255,255,255,0.85);
-  margin: 6px 0 10px;
-  letter-spacing: 3px;
-  text-shadow: 0 1px 6px rgba(0,0,0,0.3);
+  margin: 0 0 6px;
+  letter-spacing: 2px;
+  text-shadow: 0 2px 10px rgba(0,0,0,0.35);
 }
 
 .hero-tagline {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 400;
-  color: rgba(255,255,255,0.78);
+  color: rgba(255,255,255,0.86);
   margin: 0;
-  letter-spacing: 1px;
-  text-shadow: 0 1px 6px rgba(0,0,0,0.25);
+  letter-spacing: 0.5px;
+  text-shadow: 0 1px 6px rgba(0,0,0,0.3);
 }
 
-/* 右下：两个磨砂半透深色按钮 — 与"旅迹"顶部齐平 */
 .hero-actions-right {
   position: absolute;
-  right: 16px;
-  bottom: 90px;
+  right: 14px;
+  top: 14px;
   z-index: 2;
   display: flex;
-  gap: 10px;
+  gap: 8px;
 }
 
 .hero-glass-btn-right {
@@ -1429,6 +1391,85 @@ onUnmounted(() => {
   transform: scale(0.94);
 }
 
+.spot-search-bar {
+  display: flex; align-items: center; gap: 8px;
+  height: 40px; padding: 0 12px;
+  border: 1.5px solid #8B5CF6; border-radius: 20px; background: #f8f5ff;
+}
+.spot-search-ph { flex: 1; min-width: 0; font-size: 14px; color: #94a3b8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-entry { cursor: pointer; }
+.plan-entry .plan-header { margin-bottom: 12px; }
+.plan-entry .plan-header-text { flex: 1; }
+.plan-preview {
+  display: grid;
+  gap: 6px;
+  height: 148px;
+}
+.plan-preview.n-1 { grid-template-columns: 1fr; }
+.plan-preview.n-2 { grid-template-columns: 1.35fr 1fr; }
+.plan-preview.n-3 {
+  grid-template-columns: 1.4fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+.plan-preview.n-3 .plan-photo:first-child { grid-row: span 2; }
+.plan-photo {
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  height: 100%;
+  border-radius: 12px;
+  overflow: hidden;
+  background: linear-gradient(135deg, #c4b5fd, #7c3aed);
+}
+.plan-photo-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.plan-photo::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(transparent 42%, rgba(0,0,0,0.55));
+  pointer-events: none;
+}
+.plan-photo-day {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 1;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.92);
+  color: #7c3aed;
+  font-size: 10px;
+  font-weight: 700;
+}
+.plan-photo-name {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  right: 8px;
+  z-index: 1;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.4);
+}
+.spot-search-tags {
+  display: flex; gap: 8px; overflow-x: auto; margin-top: 10px;
+  scrollbar-width: none;
+}
+.spot-search-tags::-webkit-scrollbar { display: none; }
+.spot-search-tag {
+  flex-shrink: 0; padding: 5px 12px; background: #f1f5f9; border-radius: 14px;
+  font-size: 12px; color: #475569;
+}
+
 /* ==================== 统一卡片容器 ==================== */
 .section-card {
   margin: 0 12px 12px;
@@ -1448,7 +1489,7 @@ onUnmounted(() => {
 /* ==================== 服务入口：双行 5 列 ==================== */
 .service-grid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 14px 4px;
   padding: 4px 0 12px;
 }
@@ -1471,10 +1512,18 @@ onUnmounted(() => {
   justify-content: center;
   border-radius: 14px;
 }
+.service-icon-circle.is-ready { background: rgba(139, 92, 246, 0.12); }
+.service-icon-circle.is-more,
+.service-icon-circle.is-pending { background: rgba(148, 163, 184, 0.12); }
 .service-label {
-  font-size: 11px;
-  color: #475569;
+  font-size: 12px;
+  color: var(--text-secondary);
   font-weight: 500;
+}
+.service-soon {
+  font-size: 9px;
+  color: #94a3b8;
+  line-height: 1.1;
 }
 
 /* ==================== 更多产品入口条 ==================== */
@@ -1511,104 +1560,9 @@ onUnmounted(() => {
 }
 .h-scroll::-webkit-scrollbar { display: none; }
 
-/* ==================== 双列活动卡片 ==================== */
-.dual-cards-scroll {
-  display: flex;
-  gap: 12px;
-  padding: 0 12px;
-  margin-bottom: 12px;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-.dual-cards-scroll::-webkit-scrollbar { display: none; }
-
-.event-card, .city-card {
-  flex-shrink: 0;
-  width: 180px;
-  height: 120px;
-  border-radius: 16px;
-  overflow: hidden;
-  position: relative;
-  cursor: pointer;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.06);
-}
-.event-img, .city-img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.event-overlay, .city-overlay {
-  position: absolute; bottom: 0; left: 0; right: 0;
-  padding: 28px 12px 10px;
-  background: linear-gradient(transparent, rgba(0,0,0,0.55));
-}
-.event-badge, .city-badge {
-  font-size: 10px;
-  background: rgba(255,255,255,0.9);
-  color: #7C3AED;
-  padding: 2px 8px;
-  border-radius: 8px;
-  font-weight: 600;
-  align-self: flex-start;
-}
-.event-title, .city-cta { font-size: 14px; font-weight: 700; color: #fff; margin-top: 4px; }
-
-/* ==================== Banner — 椭圆卡片包裹 ==================== */
-.banner-wrap {
-  margin: 12px 12px 10px !important;
-  padding: 0 !important;
-  max-width: none !important;
-  background: transparent !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-  border: none !important;
-  box-shadow: none !important;
-  border-radius: 0 !important;
-}
-.banner-swipe { border-radius: 16px; overflow: hidden; }
-.banner-slide { position: relative; width: 100%; height: 160px; cursor: pointer; }
-.banner-img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.banner-info {
-  position: absolute; bottom: 0; left: 0; right: 0;
-  padding: 28px 16px 14px;
-  background: linear-gradient(transparent, rgba(0,0,0,0.5));
-  display: flex; flex-direction: column;
-}
-.banner-name {
-  font-size: 19px;
-  font-weight: 800;
-  letter-spacing: 1px;
-  /* 斜向高光 + 底部暗角 = 玻璃反光感 */
-  background: linear-gradient(145deg,
-    #ffffff 0%,
-    rgba(255,255,255,0.9) 15%,
-    rgba(220,210,255,0.7) 35%,
-    rgba(200,190,245,0.55) 55%,
-    rgba(255,255,255,0.85) 75%,
-    #ffffff 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  text-shadow: none;
-  /* 文字外发光强化玻璃折射 */
-  filter: drop-shadow(0 1px 3px rgba(0,0,0,0.35)) drop-shadow(0 0 8px rgba(255,255,255,0.15));
-}
-.banner-slogan {
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0.5px;
-  margin-top: 2px;
-  background: linear-gradient(145deg,
-    rgba(255,255,255,0.85) 0%,
-    rgba(220,210,255,0.6) 30%,
-    rgba(200,195,240,0.45) 55%,
-    rgba(255,255,255,0.8) 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.3));
-}
-
-/* ==================== AI 智能规划卡片 ==================== */
 .plan-card {
-  margin: 16px 8px 0 !important;
-  padding: 20px 16px !important;
+  margin: 12px 12px 0 !important;
+  padding: 16px !important;
   background:
     linear-gradient(160deg, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.15) 35%, rgba(255,255,255,0.02) 60%, rgba(255,255,255,0.65) 100%),
     rgba(255,255,255,0.65);
@@ -1620,13 +1574,18 @@ onUnmounted(() => {
     0 2px 16px rgba(0,0,0,0.04);
   border: 1px solid rgba(255,255,255,0.65);
 }
-
-/* 标题区：图标 + 主副文案 */
+.plan-search-ph {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  color: var(--text-hint);
+  padding: 10px 0;
+}
 .plan-header {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 16px;
+  margin-bottom: 14px;
 }
 .plan-icon-wrap {
   width: 42px; height: 42px;
@@ -1652,7 +1611,6 @@ onUnmounted(() => {
   margin-top: 1px;
 }
 
-/* 目的地搜索行 — 磨砂玻璃 + 聚焦流光 */
 .plan-search-row {
   display: flex;
   align-items: center;
@@ -1662,7 +1620,7 @@ onUnmounted(() => {
   -webkit-backdrop-filter: blur(8px) saturate(150%);
   border-radius: 14px;
   padding: 2px 4px 2px 14px;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
   border: 1.5px solid rgba(255,255,255,0.55);
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.55);
   transition: border-color 0.3s, box-shadow 0.3s;
@@ -1711,7 +1669,7 @@ onUnmounted(() => {
 .hot-tags {
   display: flex;
   gap: 8px;
-  margin-bottom: 14px;
+  margin-bottom: 10px;
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -1743,8 +1701,8 @@ onUnmounted(() => {
 .plan-meta-row {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-  margin-bottom: 16px;
+  gap: 8px;
+  margin-bottom: 12px;
 }
 .plan-meta-item {
   display: flex;
@@ -1826,14 +1784,32 @@ onUnmounted(() => {
 .sec-more:active { opacity: 0.6; }
 
 /* ==================== 热门目的地卡片 ==================== */
+.dest-section {
+  margin: 8px 0 16px;
+  padding-left: 16px;
+}
+.dest-section .sec-head {
+  padding-right: 16px;
+}
 .dest-card {
-  flex-shrink: 0; width: 120px; height: 150px; border-radius: 16px;
+  flex-shrink: 0; width: 152px; height: 200px; border-radius: 18px;
   overflow: hidden; position: relative; cursor: pointer;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.08);
 }
 .dest-img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.dest-mask { position: absolute; inset: 0; background: linear-gradient(transparent 45%, rgba(0,0,0,0.5)); }
-.dest-name { position: absolute; bottom: 12px; left: 12px; font-size: 15px; font-weight: 700; color: #fff; }
+.dest-mask { position: absolute; inset: 0; background: linear-gradient(transparent 40%, rgba(0,0,0,0.58)); }
+.dest-name {
+  position: absolute; bottom: 12px; left: 12px; right: 12px;
+  font-size: 20px; font-weight: 800; color: #fff;
+  text-shadow: 0 1px 8px rgba(0,0,0,0.4);
+}
+.dest-tag {
+  position: absolute; top: 10px; left: 10px;
+  font-size: 10px; font-weight: 600; color: #fff;
+  background: rgba(0,0,0,0.32);
+  padding: 3px 8px;
+  border-radius: 8px;
+}
 
 /* ==================== 骨架屏 ==================== */
 .skeleton-card {
@@ -1888,9 +1864,8 @@ onUnmounted(() => {
 /* ==================== 携程风格：优质游记（复刻社区功能） ==================== */
 .ctrip-section {
   width: 100%;
-  max-width: 480px;
   margin: 0 auto 14px;
-  padding: 0 10px;
+  padding: 0 16px;
   box-sizing: border-box;
   background: transparent;
 }
@@ -1951,9 +1926,10 @@ onUnmounted(() => {
 
 /* 笔记 Feed - 双列瀑布流 */
 .ctrip-feed {
-  padding: 10px 0 16px;
+  padding: 0 0 16px;
   display: flex;
-  gap: 8px;
+  align-items: flex-start;
+  gap: 10px;
 }
 
 .ctrip-feed-column {
@@ -1964,80 +1940,84 @@ onUnmounted(() => {
   gap: 10px;
 }
 
-/* 宣传轮播卡片 - 缩小高度实现左高右低 */
+/* 首页特色轮播：保留原有三张内容及三秒自动切换。 */
 .ctrip-promotion-card {
-  border-radius: 12px;
-  overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
-}
-.ctrip-promotion-card .van-swipe {
-  height: 150px;
-  border-radius: 12px;
-  overflow: hidden;
-}
-.ctrip-promo-slide {
   position: relative;
   width: 100%;
-  height: 100%;
+  aspect-ratio: 3 / 4;
+  flex-shrink: 0;
+  overflow: hidden;
+  border-radius: 12px;
+  background: #e8e0f2;
 }
-.ctrip-promo-img {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-.ctrip-promo-mask {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  height: 60%;
-  background: linear-gradient(transparent, rgba(0,0,0,0.7));
-}
-.ctrip-promo-tag {
-  position: absolute;
-  top: 8px;
-  left: 8px;
-  background: rgba(255, 255, 255, 0.95);
-  color: #f59e0b;
-  font-size: 10px;
-  font-weight: 700;
-  padding: 3px 8px;
-  border-radius: 6px;
-  backdrop-filter: blur(4px);
-}
-.ctrip-promo-title {
-  position: absolute;
-  bottom: 24px;
-  left: 10px;
-  color: #fff;
-  font-size: 14px;
-  font-weight: 700;
-}
-.ctrip-promo-subtitle {
-  position: absolute;
-  bottom: 8px;
-  left: 10px;
-  color: rgba(255,255,255,0.85);
-  font-size: 11px;
-}
+.ctrip-promo-swipe { position: absolute; inset: 0; height: 100%; }
+.ctrip-promo-slide { position: relative; width: 100%; height: 100%; }
+.ctrip-promo-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ctrip-promo-mask { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,0.08), transparent 35%, rgba(0,0,0,0.7)); }
+.ctrip-promo-tag { position: absolute; top: 10px; left: 10px; right: 10px; width: fit-content; padding: 4px 8px; border-radius: 8px; background: rgba(255,255,255,0.94); color: #6c40a5; font-size: 10px; font-weight: 600; }
+.ctrip-promo-copy { position: absolute; left: 12px; right: 12px; bottom: 26px; color: #fff; }
+.ctrip-promo-copy h3 { margin: 0 0 6px; font-size: 17px; line-height: 1.4; }
+.ctrip-promo-copy p { margin: 0; font-size: 11px; line-height: 1.6; color: rgba(255,255,255,0.92); }
 
-/* Feed底部提示 */
-.ctrip-feed-footer {
-  padding: 16px;
-  text-align: center;
+@property --fab-glow-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
 }
+@keyframes fab-border-flow {
+  to { --fab-glow-angle: 360deg; }
+}
+.fab-ai-btn {
+  position: fixed;
+  right: max(16px, calc((100vw - 720px) / 2 + 16px));
+  bottom: calc(84px + env(safe-area-inset-bottom, 0px));
+  z-index: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 46px;
+  padding: 0 15px;
+  border: 1px solid rgba(255,255,255,0.58);
+  border-radius: 24px;
+  background: linear-gradient(135deg, rgba(255,255,255,0.46), rgba(243,232,255,0.12)), rgba(255,255,255,0.18);
+  color: #632bb1;
+  font-size: 13px;
+  font-weight: 600;
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.65), 0 4px 20px rgba(88,49,147,0.18), 0 0 16px rgba(168,85,247,0.24);
+  transition: transform 0.2s;
+}
+.fab-ai-btn::before,
+.fab-ai-btn::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  padding: 2px;
+  background: conic-gradient(from var(--fab-glow-angle), rgba(139,92,246,0.15), #a855f7 18%, #e9d5ff 25%, rgba(139,92,246,0.12) 38%, rgba(139,92,246,0.12) 55%, #7c3aed 72%, #d8b4fe 80%, rgba(139,92,246,0.15));
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+  animation: fab-border-flow 3s linear infinite;
+}
+.fab-ai-btn::after { inset: -5px; padding: 5px; opacity: 0.35; filter: blur(3px); }
+.fab-ai-btn svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.fab-ai-btn:active { transform: scale(0.96); }
+.fab-pop-enter-active, .fab-pop-leave-active { transition: opacity 0.2s, transform 0.2s; }
+.fab-pop-enter-from, .fab-pop-leave-to { opacity: 0; transform: translateY(10px); }
+html[data-theme='dark'] .fab-ai-btn { background: linear-gradient(135deg, rgba(95,69,128,0.42), rgba(38,28,56,0.18)); border-color: rgba(216,180,254,0.4); color: #eadcff; }
 
-/* 骨架屏 */
 .ctrip-skeleton-card {
   background: #fff; border-radius: 12px; overflow: hidden;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 }
 .ctrip-skeleton-card .ctrip-sk-image {
   width: 100%;
-  aspect-ratio: var(--aspect, 3/4);
+  aspect-ratio: 3 / 4;
   background: linear-gradient(90deg, #f0f0f0 25%, #f8f8f8 50%, #f0f0f0 75%);
   background-size: 200% 100%;
   animation: shimmer 1.5s ease-in-out infinite;
@@ -2062,7 +2042,8 @@ onUnmounted(() => {
   position: relative;
   width: 100%;
   overflow: hidden;
-  background: #1a1a1a; /* 视频加载时提供暗色背景，避免白屏闪烁 */
+  aspect-ratio: 3 / 4;
+  background: #ede9f5;
 }
 .ctrip-card-image-wrapper.aspect-3-4 { aspect-ratio: 3 / 4; }
 .ctrip-card-image-wrapper.aspect-4-5 { aspect-ratio: 4 / 5; }
@@ -2134,7 +2115,7 @@ onUnmounted(() => {
 .ctrip-card-title {
   font-size: 13px;
   color: var(--text-primary);
-  line-height: 1.45;
+  line-height: 1.6;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -2201,37 +2182,6 @@ onUnmounted(() => {
   justify-content: center; border-radius: 10px;
 }
 
-/* ==================== LAYER 7: Bottom Floating AI Input Bar — 高级磨砂玻璃 ==================== */
-/* FAB — AI闪电按钮 */
-.fab-ai-btn {
-  position: fixed;
-  bottom: calc(10px + 48px + 16px + var(--safe-area-bottom, 0px));
-  right: 16px;
-  z-index: 500;
-  width: 48px; height: 48px;
-  border-radius: 50%;
-  border: 1px solid rgba(255,255,255,0.55);
-  background: rgba(255,255,255,0.65);
-  backdrop-filter: blur(18px) saturate(180%);
-  -webkit-backdrop-filter: blur(18px) saturate(180%);
-  box-shadow: 0 0 24px rgba(139,92,246,0.3), 0 0 48px rgba(139,92,246,0.12);
-  display: flex; align-items: center; justify-content: center;
-  cursor: pointer;
-  transition: transform 0.2s, box-shadow 0.25s;
-}
-.fab-ai-btn:active { transform: scale(0.9); }
-
-/* FAB 动画 */
-.fab-pop-enter-active { transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1); }
-.fab-pop-leave-active { transition: all 0.25s cubic-bezier(0.4, 0, 1, 1); }
-.fab-pop-enter-from { opacity: 0; transform: scale(0.3) translateY(20px); }
-.fab-pop-leave-to   { opacity: 0; transform: scale(0.5) translateY(30px); }
-
-/* ==================== Bottom Spacer ==================== */
-.bottom-spacer {
-  height: 8px;
-}
-
 /* ==================== More Products Popup ==================== */
 .more-popup-header {
   display: flex;
@@ -2251,6 +2201,7 @@ onUnmounted(() => {
   grid-template-columns: repeat(4, 1fr);
   gap: 16px 8px;
   padding: 10px 20px 30px;
+  overflow-y: auto;
 }
 
 .more-popup-item {
@@ -2273,6 +2224,9 @@ onUnmounted(() => {
   justify-content: center;
   border-radius: 16px;
 }
+.more-popup-icon.is-ready { background: rgba(139, 92, 246, 0.12); }
+.more-popup-icon.is-pending { background: rgba(148, 163, 184, 0.12); }
+.more-popup-item.pending { opacity: 0.9; }
 
 .more-popup-label {
   font-size: 11px;
@@ -2354,7 +2308,7 @@ onUnmounted(() => {
 
 /* ==================== Responsive ==================== */
 @media (max-width: 375px) {
-  .hero-title { font-size: 38px; }
+  .hero-title { font-size: 26px; }
   .service-grid {
     padding: 16px 10px 6px;
     gap: 10px 2px;
@@ -2401,8 +2355,7 @@ onUnmounted(() => {
   }
 }
 /* ==================== 深色模式（B4） ==================== */
-html[data-theme='dark'] .section-card,
-html[data-theme='dark'] .plan-card {
+html[data-theme='dark'] .section-card {
   background: var(--bg-card);
   border-color: var(--glass-border);
   box-shadow: var(--shadow-md);
@@ -2417,4 +2370,12 @@ html[data-theme='dark'] .ctrip-card-views,
 html[data-theme='dark'] .event-title { color: var(--text-secondary); }
 html[data-theme='dark'] .quick-item,
 html[data-theme='dark'] .dest-card { background: var(--bg-card); }
+html[data-theme='dark'] .plan-card {
+  background: var(--bg-card);
+  border-color: var(--glass-border);
+}
+html[data-theme='dark'] .plan-photo-day { background: rgba(30,27,46,0.88); color: #c4b5fd; }
+html[data-theme='dark'] .spot-search-block { background: var(--bg-card); }
+html[data-theme='dark'] .spot-search-bar { background: var(--bg-card-solid, #1e1b2e); border-color: var(--glass-border); }
+html[data-theme='dark'] .spot-search-tag { background: rgba(255,255,255,0.06); color: var(--text-secondary); }
 </style>

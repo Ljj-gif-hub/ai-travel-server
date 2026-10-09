@@ -333,7 +333,7 @@ async def generate_plan_sync(req: TravelRequest, request: Request):
         # 结果缓存：Demo 模式 / 无绑定用户不缓存；命中则跳过 LLM 直接返回
         cache_key = None
         cached_plan = None
-        if not demo_mode and data.get("user_id"):
+        if not demo_mode and data.get("user_id") and not data.get("adjustment"):
             cache_key = plan_cache.key(data)
             cached_plan = plan_cache.get(cache_key)
         if cached_plan is not None:
@@ -422,7 +422,7 @@ async def generate_plan_stream(req: TravelRequest, request: Request):
     # 结果缓存：Demo 模式 / 无绑定用户不缓存
     cache_key = None
     cached_plan = None
-    if not demo_mode and data.get("user_id"):
+    if not demo_mode and data.get("user_id") and not data.get("adjustment"):
         cache_key = plan_cache.key(data)
         cached_plan = plan_cache.get(cache_key)
 
@@ -547,7 +547,7 @@ async def generate_plan_stream_raw(request: Request):
     # 结果缓存：Demo 模式 / 无绑定用户不缓存
     cache_key = None
     cached_plan = None
-    if not demo_mode and data.get("user_id"):
+    if not demo_mode and data.get("user_id") and not data.get("adjustment"):
         cache_key = plan_cache.key(data)
         cached_plan = plan_cache.get(cache_key)
 

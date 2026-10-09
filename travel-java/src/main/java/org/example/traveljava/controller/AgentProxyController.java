@@ -58,7 +58,8 @@ public class AgentProxyController {
     @Value("${app.agent.api-key:}")
     private String agentApiKey;
 
-    public AgentProxyController(ObjectMapper objectMapper, JwtUtil jwtUtil, WebClient.Builder webClientBuilder) {
+    public AgentProxyController(ObjectMapper objectMapper, JwtUtil jwtUtil,
+                                WebClient.Builder webClientBuilder) {
         this.objectMapper = objectMapper;
         this.jwtUtil = jwtUtil;
         // 注入 Spring 托管的 WebClient.Builder：自带连接池 + 连接超时。
@@ -142,14 +143,18 @@ public class AgentProxyController {
     @PostMapping("/plan")
     @RateLimit(max = 20, duration = 60, key = "agent_plan")
     public Map<String, Object> generatePlanSync(@RequestHeader("Authorization") String authHeader,
+                                                @RequestHeader(value = "Accept-Language", defaultValue = "zh-CN") String language,
                                                 @RequestBody Map<String, Object> body) {
         Long userId = AuthUtils.requireUserId(authHeader, jwtUtil);
-        log.info("Agent 同步规划: {}", body.getOrDefault("destination", "unknown"));
+        String dest = String.valueOf(body.getOrDefault("destination", "unknown"));
+        log.info("Agent 同步规划: {}", dest);
+        // 个性化缓存由 Agent 按用户及完整请求参数管理，公共库存不能直接返回给用户。
 
         try {
             String response = agentWebClient.post()
                     .uri(agentServiceUrl + "/api/agent/plan")
                     .headers(agentAuthHeaders(authHeader, userId))
+                    .header(HttpHeaders.ACCEPT_LANGUAGE, language)
                     .contentType(MediaType.APPLICATION_JSON)
                     .bodyValue(body)
                     .retrieve()
@@ -180,10 +185,11 @@ public class AgentProxyController {
     @PostMapping(value = "/plan/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     @RateLimit(max = 20, duration = 60, key = "agent_plan")
     public Flux<String> generatePlanStream(@RequestHeader("Authorization") String authHeader,
+                                           @RequestHeader(value = "Accept-Language", defaultValue = "zh-CN") String language,
                                            @RequestBody Map<String, Object> body,
                                            HttpServletResponse response) {
         Long userId = AuthUtils.requireUserId(authHeader, jwtUtil);
-        String dest = (String) body.getOrDefault("destination", "unknown");
+        String dest = String.valueOf(body.getOrDefault("destination", "unknown"));
         log.info("Agent SSE 流式规划: {}", dest);
 
         response.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
@@ -194,6 +200,7 @@ public class AgentProxyController {
             return agentWebClient.post()
                     .uri(agentServiceUrl + "/api/agent/plan/stream-sse")
                     .headers(agentAuthHeaders(authHeader, userId))
+                    .header(HttpHeaders.ACCEPT_LANGUAGE, language)
                     .contentType(MediaType.APPLICATION_JSON)
                     .bodyValue(body)
                     .accept(MediaType.TEXT_EVENT_STREAM)
@@ -216,4 +223,5 @@ public class AgentProxyController {
             );
         }
     }
+
 }

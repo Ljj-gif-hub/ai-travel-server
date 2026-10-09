@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { showToast, showLoadingToast, closeToast } from 'vant';
 import { getToken } from '../utils/auth';
-import { userApi } from '../api';
+import { userApi, uploadApi } from '../api';
 import { getMyData, setMyData } from '../utils/userAccountStorage';
 
 const router = useRouter();
@@ -27,8 +27,26 @@ const userInfo = reactive({
 });
 
 const isLoading = ref(false);
+const uploading = ref(false);
+const avatarInput = ref(null);
+const uploadAvatar = async (event) => {
+  const file = event.target.files?.[0];
+  event.target.value = '';
+  if (!file || uploading.value) return;
+  if (!/^image\/(jpeg|png|webp|gif)$/.test(file.type) || file.size > 5 * 1024 * 1024) {
+    showToast(t('profile.avatarLimit')); return;
+  }
+  uploading.value = true;
+  try {
+    const res = await uploadApi.uploadFile(file);
+    if (res?.code !== 0 || !res.data?.url) throw new Error();
+    userInfo.avatar = res.data.url;
+  } catch { showToast(t('profile.uploadFailed')); }
+  finally { uploading.value = false; }
+};
 
 const saveProfile = async () => {
+  if (isLoading.value || uploading.value) return;
   if (!userInfo.nickname.trim()) {
     showToast(t('profile.nicknameRequired'));
     return;
@@ -54,7 +72,7 @@ const saveProfile = async () => {
     if (response.code === 0) {
       // 【多账号隔离】写入当前账号独立存储
       setMyData('userInfo', response.data)
-      localStorage.setItem('userInfo', JSON.stringify(response.data));
+      sessionStorage.setItem('userInfo', JSON.stringify(response.data));
       closeToast();
       showToast({ message: t('profile.saveSuccess'), position: 'middle' });
       setTimeout(() => { router.back(); }, 1000);
@@ -89,7 +107,7 @@ const loadProfile = async () => {
     if (accountData) {
       Object.assign(userInfo, accountData)
     } else {
-      const savedUserInfo = localStorage.getItem('userInfo');
+      const savedUserInfo = sessionStorage.getItem('userInfo');
       if (savedUserInfo) {
         try { const saved = JSON.parse(savedUserInfo); Object.assign(userInfo, saved); } catch (e) {}
       }
@@ -115,7 +133,7 @@ onMounted(() => {
     />
 
     <div class="page-content">
-      <div class="avatar-section">
+      <div class="avatar-section" role="button" tabindex="0" :aria-label="t('profile.changeAvatar')" @click="avatarInput.click()" @keydown.enter="avatarInput.click()" @keydown.space.prevent="avatarInput.click()">
         <van-image
           round
           width="100px"
@@ -123,8 +141,9 @@ onMounted(() => {
           :src="userInfo.avatar || getDefaultAvatar()"
           class="avatar-xl"
         />
-        <div class="avatar-tip">{{ t('profile.changeAvatar') }}</div>
+        <div class="avatar-tip">{{ t(uploading ? 'profile.uploading' : 'profile.changeAvatar') }}</div>
       </div>
+      <input ref="avatarInput" type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden @change="uploadAvatar" />
 
       <van-cell-group inset class="form-group">
         <van-cell :title="t('profile.nickname')">

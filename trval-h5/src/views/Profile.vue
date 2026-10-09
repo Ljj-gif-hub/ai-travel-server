@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, reactive, onActivated, onDeactivated, onUnmounted } from 'vue'
+import { ref, computed, reactive, onActivated, onDeactivated } from 'vue'
 import { useRouter } from 'vue-router'
 import { showToast, showConfirmDialog, showLoadingToast, closeToast } from 'vant'
 
@@ -8,49 +8,26 @@ import { showToast, showConfirmDialog, showLoadingToast, closeToast } from 'vant
  * 缺失会导致 Tab 切换时组件无法命中缓存，每次销毁重建 → 空白
  */
 defineOptions({ name: 'ProfileView' })
-import { getToken, removeToken, getCurrentUsername } from '../utils/auth'
+import { getToken } from '../utils/auth'
 import { sanitizeHtml } from '../utils/security'
 import { userApi, favoriteApi, couponApi, orderApi, noteApi, collectionApi } from '../api'
 import {
-  getCurrentUser,
-  setCurrentUser,
   getMyData,
   setMyData,
-  clearSession as clearAccountSession,
+  getCurrentUser,
 } from '../utils/userAccountStorage'
+import { accountNotifications, copyText, registrationLink } from '../utils/profileActions'
+import ProfileTools from '../components/ProfileTools.vue'
 import EmptyState from '../components/EmptyState.vue'
+import { useStickyAfterTrigger } from '../composables/useStickyAfterTrigger'
 import LazyImage from '../components/LazyImage.vue'
 import { defineAsyncComponent } from 'vue'
 const AIChatDialog = defineAsyncComponent(() => import('../components/AIChatDialog.vue'))
 import { getAllSessions, deleteSession, switchToSession } from '../utils/chatSession'
-import { useTheme } from '../utils/theme'
 import { useI18n } from 'vue-i18n'
-import { setLanguage } from '../i18n'
-// BUGID ACCT-1 修复：引入行程共享状态 store，登出时清空跨账号残留行程数据
-import { useTripStore } from '../stores/trip'
 
 const router = useRouter()
-const tripStore = useTripStore()
-
-/* ==================== 深色模式（B4） ==================== */
-const { themeMode, setTheme } = useTheme()
-const themeOptions = [
-  { value: 'system', labelKey: 'themeSystem' },
-  { value: 'light', labelKey: 'themeLight' },
-  { value: 'dark', labelKey: 'themeDark' },
-]
-const changeTheme = (v) => setTheme(v)
-
-/* ==================== 语言切换（B5 i18n） ==================== */
-const { t, locale } = useI18n()
-const langOptions = [
-  { value: 'zh-CN', labelKey: 'langZh' },
-  { value: 'en-US', labelKey: 'langEn' },
-]
-const changeLanguage = (v) => setLanguage(v)
-
-/* ==================== 返回 ==================== */
-const goBack = () => { if (window.history.length <= 1) router.push('/'); else router.back() }
+const { t } = useI18n()
 
 /* ==================== 用户信息 ==================== */
 const userInfo = reactive({
@@ -58,37 +35,37 @@ const userInfo = reactive({
   points: 0, following: 0, followers: 0, travelNotes: 0, bio: '',
 })
 
-const travelStats = reactive({ citiesVisited: 0, totalDays: 0, totalSpent: 0, totalPhotos: 0 })
+const travelStats = reactive({ plannedCities: 0, plannedDays: 0, paidTotal: 0, publishedNotes: 0 })
 
 const isLoggedIn = ref(!!getToken())
 const showEditPopup = ref(false)
 const showInvitePopup = ref(false)
 const editForm = ref({ nickname: '', bio: '' })
+const profileTools = ref(null)
+const saving = ref(false)
+const inviteQr = ref('')
+const qrBusy = ref(false)
+const updateLevel = data => { userInfo.level = data.level; userInfo.points = data.points }
+const profileFailed = ref(false)
 
-/* ==================== 服务列表 ==================== */
-const serviceList = ref([
+/* ==================== 常用服务：一张卡片承载两组高频入口 ==================== */
+const commonActions = ref([
   { nameKey: 'myPlans', icon: 'bookmark-o', descKey: 'myPlansDesc', badge: 0, path: '/trips', color: '#8B5CF6' },
   { nameKey: 'myOrders', icon: 'orders-o', descKey: 'myOrdersDesc', badge: 0, path: '/orders', color: '#6366F1' },
   { nameKey: 'myFavorites', icon: 'star-o', descKey: 'myFavoritesDesc', badge: 0, path: '/favorites', color: '#F59E0B' },
   { nameKey: 'myCoupons', icon: 'coupon-o', descKey: 'myCouponsDesc', badge: 0, path: '/coupons', color: '#34D399' },
-  { nameKey: 'myCollections', icon: 'label-o', descKey: 'myCollectionsDesc', badge: 0, action: 'collections', color: '#F472B6' },
+  { nameKey: 'writeNote', icon: 'edit', badge: 0, path: '/write-note', color: '#8B5CF6' },
+  { nameKey: 'post', icon: 'photograph', badge: 0, path: '/post', color: '#FB7185' },
+  { nameKey: 'invite', icon: 'friends-o', badge: 0, action: 'invite', color: '#34D399' },
+  { nameKey: 'myCollections', icon: 'label-o', badge: 0, action: 'collections', color: '#F472B6' },
 ])
 
-/* ==================== 快捷操作 ==================== */
-const quickActions = [
-  { nameKey: 'writeNote', icon: 'edit', color: '#8B5CF6', path: '/write-note' },
-  { nameKey: 'post', icon: 'photograph', color: '#FB7185', path: '/post' },
-  { nameKey: 'invite', icon: 'friends-o', color: '#34D399', action: 'invite' },
-  { nameKey: 'feedback', icon: 'smile-comment-o', color: '#F59E0B', path: '/feedback' },
+const heroTools = [
+  { nameKey: 'scan', icon: 'scan', action: 'scan' },
+  { nameKey: 'checkIn', icon: 'passed', action: 'checkIn' },
+  { nameKey: 'customerService', icon: 'service-o', action: 'service' },
+  { nameKey: 'settings', icon: 'setting-o', path: '/settings' },
 ]
-
-/* ==================== 消息分类入口（从消息页集成） ==================== */
-const categoryItems = reactive([
-  { key: 'order', labelKey: 'categoryOrder', icon: 'orders-o', color: '#3B82F6', badge: 0 },
-  { key: 'chat', labelKey: 'categoryChat', icon: 'chat-o', color: '#F59E0B', badge: 2 },
-  { key: 'notify', labelKey: 'categoryNotify', icon: 'bell-o', color: '#F97316', badge: 1 },
-  { key: 'vip', labelKey: 'categoryVip', icon: 'gem-o', color: '#EAB308', badge: 0 },
-])
 
 const conversations = ref([])
 const loadConversations = () => { conversations.value = getAllSessions() }
@@ -101,12 +78,35 @@ const deleteConversation = async (id) => { try { await showConfirmDialog({ title
 const onAIChatClose = () => { showAIChat.value = false; activeConv.value = null; aiInitialMessages.value = []; loadConversations() }
 
 const notifications = ref([])
-const loadNotifications = () => { notifications.value = [{ id:1, type:'order', icon:'orders-o', iconColor:'#3B82F6', title:'行程规划已完成', preview:'您的"北京5日游"行程已生成', time: Date.now()-1800000, unread:true }, { id:2, type:'system', icon:'bell-o', iconColor:'#F97316', title:'系统通知', preview:'新版本已上线，新增AI智能对话功能', time: Date.now()-10800000, unread:true }, { id:3, type:'coupon', icon:'coupon-o', iconColor:'#F59E0B', title:'优惠券到账', preview:'恭喜您获得新人专享优惠券', time: Date.now()-86400000, unread:false }] }
+const notificationsLoading = ref(false)
+const notificationsFailed = ref(false)
+const notificationsEnabled = ref(true)
+let activation = 0
+const loadNotifications = async () => {
+  const seq = activation
+  notificationsLoading.value = true
+  notificationsFailed.value = false
+  const results = await Promise.allSettled([orderApi.getOrders(), couponApi.getCoupons('unused')])
+  if (seq !== activation) return
+  const lists = results.map(r => r.status === 'fulfilled' && r.value?.code === 0 ? r.value.data || [] : null)
+  notificationsFailed.value = lists.some(list => list === null)
+  notifications.value = accountNotifications(lists[0] || [], lists[1] || [], getMyData('readNotifications') || [], t)
+  notificationsLoading.value = false
+}
+const openNotification = item => {
+  const readIds = new Set(getMyData('readNotifications') || [])
+  readIds.add(item.id)
+  setMyData('readNotifications', [...readIds].slice(-500))
+  item.unread = false
+  router.push(item.path)
+}
 
 const formatMsgTime = (ts) => { if(!ts) return ''; const d=new Date(ts), n=new Date(), h=Math.floor((n-d)/3600000); if(h<1) return t('profile.timeJustNow'); if(h<24) return t('profile.timeHoursAgo', { n: h }); if(h<48) return t('profile.timeYesterday'); if(h<168) return t('profile.timeDaysAgo', { n: Math.floor(h/24) }); return String(d.getMonth()+1).padStart(2,'0')+'/'+String(d.getDate()).padStart(2,'0') }
 const getConvPreview = (c) => { if(!c.messages||!c.messages.length) return t('profile.newChat'); const m=[...c.messages].reverse(); const a=m.find(x=>x.type==='ai'&&x.content); if(a) return a.content.slice(0,50)+(a.content.length>50?'...':''); const u=m.find(x=>x.type==='user'&&x.content); return u?u.content.slice(0,50)+(u.content.length>50?'...':''):t('profile.newChat') }
-const handleCategoryClick = (cat) => { if(!isLoggedIn.value){router.push('/login');return}; if(cat.key==='order') router.push('/orders'); else showToast({message:t('profile.featureDeveloping'),position:'middle'}) }
-const handleContactService = () => { showToast({message:t('profile.serviceDeveloping'),position:'middle'}) }
+const handleHeroTool = (item) => {
+  if (item.path) { router.push(item.path); return }
+  profileTools.value.open(item.action)
+}
 
 /* ==================== 工具 ==================== */
 const getBadgeContent = (num) => (num > 9 ? '9+' : String(num))
@@ -127,7 +127,7 @@ const handleAvatarClick = () => {
   catch (e) { console.error('handleAvatarClick 失败:', e) }
 }
 const handleLevelClick = () => {
-  try { if (!isLoggedIn.value) { router.push('/login'); return }; showToast(t('profile.memberUpgradeDeveloping')) }
+  try { profileTools.value.open('member') }
   catch (e) { console.error('handleLevelClick 失败:', e) }
 }
 const handleMetaClick = (type) => {
@@ -144,7 +144,9 @@ const handleEditClick = () => {
   } catch (e) { console.error('handleEditClick 失败:', e) }
 }
 const saveProfile = async () => {
+  if (saving.value) return
   if (!editForm.value.nickname.trim()) { showToast(t('profile.nicknameRequired')); return }
+  saving.value = true
   const toast = showLoadingToast({ message: t('profile.saving'), duration: 0, forbidClick: true })
   try {
     const response = await userApi.updateProfile({ nickname: editForm.value.nickname, bio: editForm.value.bio })
@@ -152,18 +154,17 @@ const saveProfile = async () => {
       const data = response.data; userInfo.nickname = data.nickname; userInfo.bio = data.bio || ''
       // 【多账号隔离】写入当前账号独立存储
       setMyData('userInfo', { ...userInfo })
-      localStorage.setItem('userInfo', JSON.stringify(userInfo)); showEditPopup.value = false; closeToast(); showToast(t('profile.updateSuccess'))
+      sessionStorage.setItem('userInfo', JSON.stringify(userInfo)); showEditPopup.value = false; closeToast(); showToast(t('profile.updateSuccess'))
     } else { closeToast(); showToast(response.message || t('profile.saveFailed')) }
   } catch (error) {
     // 保存失败：不写本地、不回退弹窗，提示重试（避免误报"已保存到本地"导致数据丢失）
     closeToast(); showToast(t('profile.saveFailedRetry'))
-  }
+  } finally { saving.value = false }
 }
 
 const handleWriteNote = () => { if (!isLoggedIn.value) { router.push('/login'); return }; router.push('/write-note') }
 const handleInvite = () => { if (!isLoggedIn.value) { router.push('/login'); return }; showInvitePopup.value = true }
-const inviteOrigin = ref(window.location.origin)
-const inviteLink = computed(() => `${inviteOrigin.value}/register?invite=${userInfo.username || 'traveler'}`)
+const inviteLink = computed(() => registrationLink(window.location.href))
 const inviteShareOptions = [
   { key: 'wechat', nameKey: 'shareWechatFriend', icon: 'wechat', color: '#07C160' },
   { key: 'moments', nameKey: 'shareMoments', icon: 'cluster-o', color: '#07C160' },
@@ -174,29 +175,33 @@ const inviteShareOptions = [
 ]
 const handleInviteShare = async (opt) => {
   if (opt.key === 'copyLink') {
-    try { await navigator.clipboard.writeText(inviteLink.value); showToast(t('profile.inviteLinkCopied')) } catch { showToast(t('profile.copyFailed')) }
+    await copyInviteLink()
   } else if (opt.key === 'saveQr') {
-    showToast(t('profile.qrDeveloping'))
+    if (qrBusy.value) return
+    qrBusy.value = true
+    try {
+      const { default: QRCode } = await import('qrcode')
+      inviteQr.value = await QRCode.toDataURL(inviteLink.value, { width: 360, margin: 2 })
+      const link = document.createElement('a')
+      link.href = inviteQr.value; link.download = 'travel-invite.png'; link.click()
+    } catch { showToast(t('profile.shareFailed')) }
+    finally { qrBusy.value = false }
   } else if (navigator.share) {
     try {
       await navigator.share({ title: t('app.name'), text: t('profile.inviteShareText'), url: inviteLink.value })
-    } catch {}
+    } catch (error) { if (error.name !== 'AbortError') await copyInviteLink() }
   } else {
-    try { await navigator.clipboard.writeText(inviteLink.value); showToast(t('profile.copyShareFor', { platform: t('profile.' + opt.nameKey) })) } catch { showToast(t('profile.shareFailed')) }
+    try { await copyText(inviteLink.value); showToast(t('profile.copyShareFor', { platform: t('profile.' + opt.nameKey) })) } catch { showToast(t('profile.copyManually')) }
   }
 }
 const copyInviteLink = async () => {
-  try { await navigator.clipboard.writeText(inviteLink.value); showToast(t('profile.inviteLinkCopied')) } catch { showToast(t('profile.copyFailed')) }
+  try { await copyText(inviteLink.value); showToast(t('profile.inviteLinkCopied')) } catch { showToast(t('profile.copyManually')) }
 }
 const shareInvite = () => { showInvitePopup.value = true }
-const handleQuickAction = (item) => {
+const handleCommonAction = (item) => {
   if (!isLoggedIn.value) { router.push('/login'); return }
   if (item.action === 'invite') handleInvite(); else if (item.path) router.push(item.path)
-}
-const handleServiceClick = (item) => {
-  if (!isLoggedIn.value) { router.push('/login'); return }
   if (item.action === 'collections') { openCollections(); return }
-  if (item.path) router.push(item.path)
 }
 
 /* ==================== 我的收藏夹（新功能） ==================== */
@@ -332,40 +337,22 @@ const submitCreateCollection = async () => {
   }
 }
 
-/* ==================== 退出登录 ==================== */
-let logoutTimer = null // 退出跳转定时器：onUnmounted 时清理
-const handleLogout = async () => {
-  try {
-    await showConfirmDialog({ title: t('profile.logoutConfirmTitle'), message: t('profile.logoutConfirmMessage') })
-    showLoadingToast({ message: t('profile.loggingOut'), duration: 0, forbidClick: true, loadingType: 'spinner' })
-    try { await userApi.logout() } catch (error) { /* 后端失败继续清除 */ }
-    finally {
-      removeToken()
-      // 【多账号隔离】退出仅清空会话缓存，保留账号持久化数据
-      clearAccountSession()
-      // BUGID ACCT-1 修复：登出时清空行程 store 的跨账号残留数据（planData/酒店/地图点等）
-      tripStore.resetState()
-      // BUGID ACCT-2 修复：登出时一并清除全局 localStorage.userInfo，防止切换账号残留上一账号信息
-      localStorage.removeItem('userInfo')
-      isLoggedIn.value = false; resetUserInfo(); closeToast()
-      showToast({ message: t('profile.loggedOut'), position: 'middle' })
-      clearTimeout(logoutTimer)
-      logoutTimer = setTimeout(() => router.push('/login'), 800)
-    }
-  } catch (e) { /* 取消 */ }
-}
-
 const resetUserInfo = () => {
   userInfo.avatar = ''; userInfo.nickname = t('profile.traveler'); userInfo.username = ''; userInfo.level = t('profile.regularMember')
   userInfo.points = 0; userInfo.following = 0; userInfo.followers = 0; userInfo.travelNotes = 0; userInfo.bio = ''
-  travelStats.citiesVisited = 0; travelStats.totalDays = 0; travelStats.totalSpent = 0; travelStats.totalPhotos = 0
-  serviceList.value.forEach(item => item.badge = 0)
+  Object.keys(travelStats).forEach(key => travelStats[key] = 0)
+  commonActions.value.forEach(item => item.badge = 0)
 }
 
 /* ==================== 数据加载 ==================== */
 const loadProfile = async () => {
+  const account = getCurrentUser()
+  const seq = activation
+  profileFailed.value = false
   try {
     const response = await userApi.getProfile()
+    if (seq !== activation) return
+    if (response?.code !== 0) throw new Error()
     if (response.code === 0) {
       const data = response.data
       userInfo.avatar = data.avatar || userInfo.avatar
@@ -373,33 +360,40 @@ const loadProfile = async () => {
       userInfo.level = data.level || t('profile.regularMember'); userInfo.points = data.points || 0
       userInfo.following = data.following || 0; userInfo.followers = data.followers || 0
       userInfo.travelNotes = data.travelNotes || 0; userInfo.bio = data.bio || ''
-      travelStats.citiesVisited = data.citiesVisited || 0; travelStats.totalDays = data.totalDays || 0
-      travelStats.totalSpent = data.totalSpent || 0; travelStats.totalPhotos = data.totalPhotos || 0
+      Object.keys(travelStats).forEach(key => travelStats[key] = data[key] ?? null)
       // 【多账号隔离】写入当前账号独立存储
       setMyData('userInfo', { ...userInfo })
-      localStorage.setItem('userInfo', JSON.stringify(userInfo))
+      sessionStorage.setItem('userInfo', JSON.stringify(userInfo))
     }
   } catch (error) {
+    if (seq !== activation || getCurrentUser() !== account) return
+    profileFailed.value = true
     // 【多账号隔离】离线/网络异常时优先从当前账号本地数据恢复
     const accountData = getMyData('userInfo')
     if (accountData) {
       Object.assign(userInfo, accountData)
     } else {
-      const saved = localStorage.getItem('userInfo')
+      const saved = sessionStorage.getItem('userInfo')
       if (saved) { try { Object.assign(userInfo, JSON.parse(saved)) } catch (e) { /* */ } }
     }
   }
 }
 
 const loadBadgeCounts = async () => {
+  const seq = activation
   try {
     const [favoriteRes, couponRes, orderRes, noteRes] = await Promise.all([
       favoriteApi.getFavoriteCount(), couponApi.getCouponCount('unused'),
       orderApi.getOrderCount('pending'), noteApi.getNoteCount(),
     ])
-    if (favoriteRes.code === 0) serviceList.value[2].badge = favoriteRes.data.count || 0
-    if (couponRes.code === 0) serviceList.value[3].badge = couponRes.data.count || 0
-    if (orderRes.code === 0) serviceList.value[1].badge = orderRes.data.count || 0
+    if (seq !== activation) return
+    const setBadge = (nameKey, value) => {
+      const item = commonActions.value.find(action => action.nameKey === nameKey)
+      if (item) item.badge = value || 0
+    }
+    if (favoriteRes.code === 0) setBadge('myFavorites', favoriteRes.data.count)
+    if (couponRes.code === 0) setBadge('myCoupons', couponRes.data.count)
+    if (orderRes.code === 0) setBadge('myOrders', orderRes.data.count)
     if (noteRes.code === 0) userInfo.travelNotes = noteRes.data.count || 0
   } catch (error) { /* 角标降级 */ }
 }
@@ -407,15 +401,13 @@ const loadBadgeCounts = async () => {
 const goToLogin = () => router.push('/login')
 
 const statCards = [
-  { key: 'citiesVisited', labelKey: 'statCities', icon: 'location-o', color: '#8B5CF6' },
-  { key: 'totalDays', labelKey: 'statDays', icon: 'calendar-o', color: '#6366F1' },
-  { key: 'totalSpent', labelKey: 'statSpent', icon: 'gold-coin-o', color: '#F59E0B', isMoney: true },
-  { key: 'totalPhotos', labelKey: 'statPhotos', icon: 'photo-o', color: '#34D399' },
+  { key: 'plannedCities', labelKey: 'statPlannedCities', icon: 'location-o', color: '#8B5CF6', path: '/my-routes' },
+  { key: 'plannedDays', labelKey: 'statPlannedDays', icon: 'calendar-o', color: '#6366F1', path: '/my-routes' },
+  { key: 'paidTotal', labelKey: 'statPaidTotal', icon: 'gold-coin-o', color: '#F59E0B', isMoney: true, path: '/orders' },
+  { key: 'publishedNotes', labelKey: 'statPublishedNotes', icon: 'edit', color: '#34D399', path: '/notes' },
 ]
 
-onMounted(() => { if (isLoggedIn.value) { loadProfile(); loadBadgeCounts() } })
-
-onUnmounted(() => { clearTimeout(logoutTimer); logoutTimer = null })
+const { trigger: profileTopbarTrigger, visible: profileTopbarVisible } = useStickyAfterTrigger()
 
 /*
  * 【Bug修复】keep-alive 缓存后，onMounted 只执行一次
@@ -423,23 +415,20 @@ onUnmounted(() => { clearTimeout(logoutTimer); logoutTimer = null })
  * 避免缓存导致的数据过期（如积分、游记数变化）
  */
 onActivated(() => {
-  // 重新检查登录状态（可能在其他 Tab 登录/退出了）
-  const wasLoggedIn = isLoggedIn.value
+  activation++
+  resetUserInfo()
+  conversations.value = []; notifications.value = []
   isLoggedIn.value = !!getToken()
-  // 登录状态变化时重新加载
-  if (isLoggedIn.value && !wasLoggedIn) {
-    loadProfile(); loadBadgeCounts()
-  } else if (isLoggedIn.value) {
-    // 已登录：轻量刷新角标
-    loadBadgeCounts()
-    loadConversations(); loadNotifications();
-  } else if (!isLoggedIn.value && wasLoggedIn) {
-    resetUserInfo()
+  notificationsEnabled.value = getMyData('notificationsEnabled') !== false
+  if (isLoggedIn.value) {
+    loadProfile(); loadBadgeCounts(); loadConversations()
+    if (notificationsEnabled.value) loadNotifications()
   }
 })
 
 /* 【性能优化】离开个人中心时清理弹窗状态 */
 onDeactivated(() => {
+  activation++
   showEditPopup.value = false
   showInvitePopup.value = false
   showAIChat.value = false; activeConv.value = null;
@@ -450,12 +439,32 @@ onDeactivated(() => {
 <template>
   <div class="profile-page">
     <!-- 漂浮粒子 — 已禁用 -->
+    <header class="profile-topbar" :class="{ visible: profileTopbarVisible }" :aria-hidden="!profileTopbarVisible" :inert="!profileTopbarVisible">
+      <button type="button" class="profile-topbar-user" @click="handleAvatarClick">
+        <van-image v-if="isLoggedIn && userInfo.avatar" round width="36" height="36" :src="userInfo.avatar" fit="cover" />
+        <span v-else class="profile-topbar-avatar"><van-icon name="user-o" size="20" /></span>
+        <span>{{ isLoggedIn ? sanitizeHtml(userInfo.nickname) : t('profile.traveler') }}</span>
+      </button>
+      <div class="hero-tools" aria-label="常用工具">
+        <button v-for="item in heroTools" :key="item.action || item.path" class="hero-tool" @click="handleHeroTool(item)">
+          <van-icon :name="item.icon" size="20" />
+          <span>{{ t('profile.' + item.nameKey) }}</span>
+        </button>
+      </div>
+    </header>
     <div class="profile-wrap">
 
       <!-- ======== 用户信息头图 ======== -->
       <div class="hero-card entrance-item entrance-d1">
         <img class="hero-bg-img" src="https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?w=1920&q=85" alt="" />
         <div class="hero-overlay"></div>
+
+        <div class="hero-tools" aria-label="常用工具">
+          <button v-for="item in heroTools" :key="item.action || item.path" class="hero-tool" @click="handleHeroTool(item)">
+            <van-icon :name="item.icon" size="22" />
+            <span>{{ t('profile.' + item.nameKey) }}</span>
+          </button>
+        </div>
 
         <!-- 登录态 -->
         <template v-if="isLoggedIn">
@@ -484,12 +493,12 @@ onDeactivated(() => {
 
           <!-- 旅行统计 -->
           <div class="stats-row">
-            <div v-for="(s, i) in statCards" :key="i" class="stat-cell" :style="{ '--stat-color': s.color }">
+            <div v-for="(s, i) in statCards" :key="i" class="stat-cell" :style="{ '--stat-color': s.color }" role="button" tabindex="0" @click="router.push(s.path)" @keydown.enter="router.push(s.path)" @keydown.space.prevent="router.push(s.path)">
               <div class="stat-icon-wrap">
                 <van-icon :name="s.icon" :color="s.color" size="18" />
               </div>
               <div class="stat-val">
-                {{ s.isMoney ? '¥' + formatMoney(travelStats[s.key]) : formatNumber(travelStats[s.key]) }}
+                {{ travelStats[s.key] == null ? '—' : s.isMoney ? '¥' + formatMoney(travelStats[s.key]) : formatNumber(travelStats[s.key]) }}
               </div>
               <div class="stat-lbl">{{ t('profile.' + s.labelKey) }}</div>
             </div>
@@ -526,29 +535,21 @@ onDeactivated(() => {
           </div>
         </template>
       </div>
+      <span ref="profileTopbarTrigger" class="profile-topbar-trigger" aria-hidden="true" />
+      <van-button v-if="isLoggedIn && profileFailed" block size="small" @click="loadProfile">{{ t('profile.profileRetry') }}</van-button>
 
-      <!-- ======== 快捷操作 ======== -->
+      <!-- ======== 常用服务：合并原快捷操作、消息分类和服务列表 ======== -->
       <div class="section-card entrance-item entrance-d2">
-        <div class="sec-head"><span class="sec-title">{{ t('profile.quickActions') }}</span></div>
-        <div class="quick-row">
-          <div v-for="(item, i) in quickActions" :key="i" class="quick-block" @click="handleQuickAction(item)">
-            <div class="quick-block-icon" :style="{ background: `${item.color}18` }">
+        <div class="sec-head"><span class="sec-title">{{ t('profile.commonServices') }}</span></div>
+        <div class="common-grid">
+          <div v-for="item in commonActions" :key="item.nameKey" class="common-item" @click="handleCommonAction(item)">
+            <div class="common-icon-wrap">
+              <div class="common-icon" :style="{ background: `${item.color}18` }">
               <van-icon :name="item.icon" :color="item.color" size="22" />
+              </div>
+              <van-badge v-if="item.badge > 0" :content="getBadgeContent(item.badge)" class="common-badge" />
             </div>
-            <span class="quick-block-label">{{ t('profile.' + item.nameKey) }}</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- ======== 消息分类入口 ======== -->
-      <div class="section-card">
-        <div class="category-grid">
-          <div v-for="cat in categoryItems" :key="cat.key" class="cat-item" @click="handleCategoryClick(cat)">
-            <div class="cat-icon-wrap">
-              <div class="cat-icon" :style="{ background: `${cat.color}14` }"><van-icon :name="cat.icon" :color="cat.color" size="22" /></div>
-              <van-badge v-if="cat.badge > 0" :content="cat.badge" class="cat-badge" />
-            </div>
-            <span class="cat-label">{{ t('profile.' + cat.labelKey) }}</span>
+            <span class="common-label">{{ t('profile.' + item.nameKey) }}</span>
           </div>
         </div>
       </div>
@@ -572,74 +573,24 @@ onDeactivated(() => {
       </div>
 
       <!-- ======== 消息通知 ======== -->
-      <div class="section-card" v-if="isLoggedIn">
+      <div class="section-card" v-if="isLoggedIn && notificationsEnabled">
         <div class="sec-head"><span class="sec-title">{{ t('profile.notifications') }}</span></div>
-        <div v-if="notifications.length === 0" class="empty-notif"><p class="empty-notif-title">{{ t('profile.noMoreMessages') }}</p><p class="empty-notif-hint">{{ t('profile.notificationsHint') }}</p></div>
-        <div v-else class="notif-list">
-          <div v-for="item in notifications" :key="item.id" class="notif-item" :class="{ unread: item.unread }">
+        <van-loading v-if="notificationsLoading" />
+        <van-button v-if="notificationsFailed" block size="small" @click="loadNotifications">{{ t('profile.notificationsRetry') }}</van-button>
+        <div v-if="!notificationsLoading && !notificationsFailed && notifications.length === 0" class="empty-notif"><p class="empty-notif-title">{{ t('profile.noMoreMessages') }}</p><p class="empty-notif-hint">{{ t('profile.notificationsHint') }}</p></div>
+        <div class="notif-list">
+          <div v-for="item in notifications" :key="item.id" class="notif-item" :class="{ unread: item.unread }" role="button" tabindex="0" @click="openNotification(item)" @keydown.enter="openNotification(item)" @keydown.space.prevent="openNotification(item)">
             <div class="notif-icon-wrap"><div class="notif-icon" :style="{ background: `${item.iconColor}14` }"><van-icon :name="item.icon" :color="item.iconColor" size="20" /></div><span v-if="item.unread" class="notif-dot" /></div>
             <div class="notif-body"><div class="notif-top-row"><span class="notif-title">{{ item.title }}</span><span class="notif-time">{{ formatMsgTime(item.time) }}</span></div><p class="notif-preview">{{ item.preview }}</p></div>
           </div>
         </div>
       </div>
 
-      <!-- ======== 我的服务 ======== -->
-      <div class="section-card">
-        <div class="sec-head"><span class="sec-title">{{ t('profile.myServices') }}</span></div>
-        <div class="service-list">
-          <div v-for="(item, i) in serviceList" :key="i" class="svc-item" @click="handleServiceClick(item)">
-            <div class="svc-left">
-              <div class="svc-icon-box" :style="{ background: `${item.color}14` }">
-                <van-icon :name="item.icon" :color="item.color" size="20" />
-              </div>
-              <div class="svc-text">
-                <div class="svc-name">{{ t('profile.' + item.nameKey) }}</div>
-                <div class="svc-desc">{{ t('profile.' + item.descKey) }}</div>
-              </div>
-            </div>
-            <div class="svc-right">
-              <van-badge v-if="item.badge > 0" :content="getBadgeContent(item.badge)" />
-              <van-icon name="arrow" size="16" color="#CBD5E1" />
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- ======== 深色模式 ======== -->
-      <div class="settings-card">
-        <div class="settings-title">{{ t('settings.theme') }}</div>
-        <div class="theme-options">
-          <button
-            v-for="opt in themeOptions"
-            :key="opt.value"
-            :class="['theme-opt', { active: themeMode === opt.value }]"
-            @click="changeTheme(opt.value)"
-          >{{ t(`settings.${opt.labelKey}`) }}</button>
-        </div>
-      </div>
-
-      <!-- ======== 语言切换 ======== -->
-      <div class="settings-card">
-        <div class="settings-title">{{ t('settings.language') }}</div>
-        <div class="theme-options">
-          <button
-            v-for="opt in langOptions"
-            :key="opt.value"
-            :class="['theme-opt', { active: locale === opt.value }]"
-            @click="changeLanguage(opt.value)"
-          >{{ t(`settings.${opt.labelKey}`) }}</button>
-        </div>
-      </div>
-
-      <!-- ======== 退出登录 ======== -->
-      <div v-if="isLoggedIn" class="logout-wrap">
-        <button class="logout-btn btn-tap-scale" @click="handleLogout">{{ t('common.logout') }}</button>
-      </div>
-
       <div style="height: 8px;" />
     </div>
 
     <AIChatDialog v-model:visible="showAIChat" :initial-messages="aiInitialMessages" @close="onAIChatClose" />
+    <ProfileTools ref="profileTools" @updated="updateLevel" />
 
     <!-- ======== 编辑资料弹窗 ======== -->
     <van-popup v-model:show="showEditPopup" position="bottom" :style="{ height: '42%' }" round>
@@ -654,7 +605,7 @@ onDeactivated(() => {
         </van-cell-group>
         <div class="pop-btns">
           <van-button type="default" block class="pop-btn" @click="showEditPopup = false">{{ t('common.cancel') }}</van-button>
-          <van-button type="primary" block class="pop-btn pop-btn-primary" @click="saveProfile">{{ t('common.save') }}</van-button>
+          <van-button type="primary" block class="pop-btn pop-btn-primary" :loading="saving" @click="saveProfile">{{ t('common.save') }}</van-button>
         </div>
       </div>
     </van-popup>
@@ -672,6 +623,8 @@ onDeactivated(() => {
           <span class="invite-link">{{ inviteLink }}</span>
           <van-icon name="description" size="16" color="#8B5CF6" />
         </div>
+        <img v-if="inviteQr" :src="inviteQr" :alt="t('profile.saveQr')" style="display:block;width:180px;max-width:100%;margin:12px auto" />
+        <p v-if="inviteQr">{{ t('profile.qrSaveHint') }}</p>
         <div class="share-grid">
           <div v-for="opt in inviteShareOptions" :key="opt.key" class="share-option" @click="handleInviteShare(opt)">
             <div class="share-icon-circle" :style="{ background: opt.color }"><van-icon :name="opt.icon" size="22" color="#fff" /></div>
@@ -788,11 +741,51 @@ onDeactivated(() => {
   padding-bottom: calc(10px + 48px + 12px + var(--safe-area-bottom, 0px));
 }
 .profile-wrap { max-width: 480px; margin: 0 auto; padding: 0 14px; }
+.profile-topbar {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  z-index: 1000;
+  width: min(100%, 480px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 58px;
+  padding: calc(env(safe-area-inset-top, 0px) + 7px) 10px 7px 14px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate3d(-50%, -100%, 0);
+  transition: opacity 0.3s ease, transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  border-bottom: 0.5px solid rgba(0, 0, 0, 0.06);
+}
+.profile-topbar.visible { opacity: 1; pointer-events: auto; transform: translate3d(-50%, 0, 0); }
+.profile-topbar-user {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 15px;
+  font-weight: 700;
+}
+.profile-topbar-user > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-topbar-avatar { width: 36px; height: 36px; flex-shrink: 0; border-radius: 50%; background: rgba(139,92,246,0.12); color: #7c3aed; display: grid; place-items: center; }
+.profile-topbar .hero-tools { position: static; flex-shrink: 0; gap: 0; }
+.profile-topbar .hero-tool { width: 43px; padding: 2px 0; color: var(--text-primary); font-size: 9px; text-shadow: none; }
+.profile-topbar-trigger { display:block; width:1px; height:1px; transform:translateY(-58px); }
+html[data-theme='dark'] .profile-topbar { background: rgba(24, 27, 40, 0.9); border-bottom-color: rgba(255,255,255,0.06); }
 
 /* ==================== Hero 卡片 — 山水大图 + 用户信息 ==================== */
 .hero-card {
   position: relative; overflow: hidden;
-  border-radius: 0 0 22px 22px; padding: 24px; margin: 0 -14px 14px;
+  border-radius: 0 0 22px 22px; padding: 76px 24px 24px; margin: 0 -14px 14px;
   color: #fff; box-shadow: 0 4px 20px rgba(0,0,0,0.1);
 }
 .hero-bg-img {
@@ -801,10 +794,24 @@ onDeactivated(() => {
 }
 .hero-overlay {
   position: absolute; inset: 0;
-  background: linear-gradient(160deg, rgba(0,0,0,0.15) 0%, rgba(0,0,0,0.25) 50%, rgba(0,0,0,0.5) 100%);
+  background:
+    linear-gradient(180deg, rgba(9, 12, 20, 0.48) 0%, rgba(9, 12, 20, 0.24) 42%, rgba(9, 12, 20, 0.68) 100%),
+    linear-gradient(90deg, rgba(9, 12, 20, 0.34), transparent 72%);
   pointer-events: none; z-index: 1;
 }
 .hero-decor, .hero-decor-svg { display: none; }
+
+.hero-tools {
+  position: absolute; z-index: 3; top: 14px; right: 14px;
+  display: flex; gap: 3px;
+}
+.hero-tool {
+  width: 53px; padding: 4px 0; border: 0; background: transparent; color: #fff;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  font-size: 10px; font-weight: 600; text-shadow: 0 1px 5px rgba(0,0,0,0.65);
+  cursor: pointer;
+}
+.hero-tool:active { transform: scale(0.92); }
 
 /* 用户行 */
 .hero-user { display: flex; gap: 14px; position: relative; z-index: 2; }
@@ -881,74 +888,20 @@ onDeactivated(() => {
 .sec-head { margin-bottom: 14px; }
 .sec-title { font-size: 16px; font-weight: 700; color: var(--text-primary); }
 
-/* ==================== 快捷操作 ==================== */
-.quick-row { display: flex; justify-content: space-around; }
-.quick-block {
+/* ==================== 常用服务 ==================== */
+.common-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px 6px; }
+.common-item {
   display: flex; flex-direction: column; align-items: center; gap: 8px;
   cursor: pointer; transition: transform 0.2s;
 }
-.quick-block:active { transform: scale(0.94); }
-.quick-block-icon {
-  width: 52px; height: 52px; border-radius: 16px;
+.common-item:active { transform: scale(0.94); }
+.common-icon-wrap { position: relative; }
+.common-icon {
+  width: 48px; height: 48px; border-radius: 15px;
   display: flex; align-items: center; justify-content: center;
 }
-.quick-block-label { font-size: 12px; color: #475569; font-weight: 500; }
-
-/* ==================== 服务列表 ==================== */
-.service-list { display: flex; flex-direction: column; }
-.svc-item {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 15px 4px; border-bottom: 1px solid #F8FAFC;
-  cursor: pointer; transition: background 0.15s;
-}
-.svc-item:last-child { border-bottom: none; }
-.svc-item:active { background: #faf5ff; margin: 0 -8px; padding-left: 12px; padding-right: 12px; border-radius: 10px; }
-
-.svc-left { display: flex; align-items: center; gap: 12px; }
-.svc-icon-box {
-  width: 42px; height: 42px; border-radius: 12px;
-  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
-}
-.svc-text { display: flex; flex-direction: column; }
-.svc-name { font-size: 15px; font-weight: 500; color: var(--text-primary); }
-.svc-desc { font-size: 12px; color: var(--text-hint); margin-top: 2px; }
-.svc-right { display: flex; align-items: center; gap: 8px; }
-
-/* ==================== 退出登录 ==================== */
-.logout-wrap { padding: 4px 0; }
-
-/* 深色模式设置卡 */
-.settings-card {
-  background: rgba(255,255,255,0.72);
-  backdrop-filter: blur(16px);
-  border-radius: 18px;
-  padding: 14px 16px;
-  margin-bottom: 12px;
-  border: 1px solid rgba(255,255,255,0.5);
-  box-shadow: 0 4px 18px rgba(0,0,0,0.04);
-}
-.settings-title { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin-bottom: 10px; }
-.theme-options { display: flex; gap: 8px; }
-.theme-opt {
-  flex: 1; padding: 8px 0; border: 1px solid #E2E8F0; border-radius: 12px;
-  background: transparent; color: var(--text-secondary); font-size: 13px; font-weight: 500;
-  cursor: pointer; transition: all 0.2s;
-}
-.theme-opt.active {
-  background: linear-gradient(135deg, #8B5CF6, #6366F1);
-  border-color: transparent; color: #fff; font-weight: 600;
-  box-shadow: 0 4px 12px rgba(139,92,246,0.25);
-}
-.logout-btn {
-  width: 100%; padding: 14px; border: none; border-radius: 18px;
-  background: linear-gradient(135deg, #FECACA 0%, #FCA5A5 100%);
-  color: #DC2626; font-size: 15px; font-weight: 600;
-  cursor: pointer; transition: all 0.25s;
-  box-shadow: 0 4px 14px rgba(239,68,68,0.15);
-  letter-spacing: 1px;
-}
-.logout-btn:hover { box-shadow: 0 8px 24px rgba(239,68,68,0.25); }
-.logout-btn:active { transform: scale(0.96); }
+.common-label { max-width: 72px; font-size: 12px; color: #475569; font-weight: 500; text-align: center; line-height: 1.3; }
+.common-badge { position: absolute; top: -5px; right: -7px; }
 
 /* ==================== 弹窗 ==================== */
 .pop-header {
@@ -1030,17 +983,6 @@ onDeactivated(() => {
 /* 顶部hero卡片渐变流动 */
 .hero-card { background-size: 200% 200%; }
 /* hero-card不设animation避免覆盖entrance-item的entranceUp */
-/* 服务菜单项hover左滑高亮 */
-.svc-item { transition: transform 0.3s cubic-bezier(0.4,0,0.2,1), background 0.3s ease, padding-left 0.3s ease; }
-.svc-item:hover { transform: translateX(4px); padding-left: 8px; background: rgba(139,92,246,0.04); border-radius: 10px; }
-.svc-item:active { transform: scale(0.98); }
-.category-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:4px; }
-.cat-item { display:flex; flex-direction:column; align-items:center; gap:8px; cursor:pointer; padding:10px 0; transition:transform 0.2s; }
-.cat-item:active { transform:scale(0.94); }
-.cat-icon-wrap { position:relative; }
-.cat-icon { width:50px; height:50px; border-radius:16px; display:flex; align-items:center; justify-content:center; }
-.cat-badge { position:absolute; top:-2px; right:-6px; }
-.cat-label { font-size:12px; color:#475569; font-weight:500; }
 .conv-list { display:flex; flex-direction:column; gap:10px; }
 .conv-card { display:flex; align-items:center; gap:12px; background:linear-gradient(160deg, rgba(255,255,255,0.65) 0%, rgba(255,255,255,0.15) 40%, rgba(255,255,255,0.3) 100%),rgba(255,255,255,0.65); backdrop-filter:blur(12px) saturate(150%); -webkit-backdrop-filter:blur(12px) saturate(150%); border-radius:20px; box-shadow:inset 0 1px 0 rgba(255,255,255,0.6),0 2px 10px rgba(0,0,0,0.03); border:1px solid rgba(255,255,255,0.6); overflow:hidden; }
 .conv-accent { width:4px; min-width:4px; align-self:stretch; background:linear-gradient(180deg,#A78BFA,#8B5CF6,#6366F1); border-radius:2px 0 0 2px; }
@@ -1068,15 +1010,10 @@ onDeactivated(() => {
 .notif-time { font-size:11px; color:var(--text-hint); flex-shrink:0; }
 .notif-preview { font-size:13px; color:var(--text-secondary); margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 /* ==================== 深色模式（B4） ==================== */
-html[data-theme='dark'] .section-card,
-html[data-theme='dark'] .settings-card {
+html[data-theme='dark'] .section-card {
   background: var(--bg-card);
   border-color: var(--glass-border);
   box-shadow: var(--shadow-md);
 }
-html[data-theme='dark'] .svc-item { background: transparent; }
-html[data-theme='dark'] .svc-name { color: var(--text-primary); }
-html[data-theme='dark'] .svc-desc { color: var(--text-secondary); }
-html[data-theme='dark'] .quick-block-label { color: var(--text-secondary); }
-html[data-theme='dark'] .theme-opt:not(.active) { color: var(--text-secondary); border-color: var(--glass-border); background: var(--bg-card); }
+html[data-theme='dark'] .common-label { color: var(--text-secondary); }
 </style>

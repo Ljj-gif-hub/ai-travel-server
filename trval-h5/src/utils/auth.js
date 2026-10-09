@@ -90,22 +90,10 @@ export function removeRefreshToken() {
 
 /**
  * 获取当前登录用户名
- * 优先从 sessionStorage CURRENT_USER 读取（兼容 userAccountStorage 的 localStorage 写入）
- */export function getCurrentUsername() {
-  try {
-    // 新方案：从 CURRENT_USER 直接读取（sessionStorage 优先，localStorage 兜底）
-    const user = sessionStorage.getItem('CURRENT_USER') || localStorage.getItem('CURRENT_USER')
-    if (user) return user
-    // 兼容旧数据：从 userInfo 中解析
-    const raw = sessionStorage.getItem('userInfo') || localStorage.getItem('userInfo')
-    if (raw) {
-      const info = JSON.parse(raw)
-      if (info && info.username) return info.username
-    }
-    return ''
-  } catch {
-    return ''
-  }
+ * 与账号数据存储共用同一个会话身份来源。
+ */
+export function getCurrentUsername() {
+  return getCurrentUser()
 }
 
 /**

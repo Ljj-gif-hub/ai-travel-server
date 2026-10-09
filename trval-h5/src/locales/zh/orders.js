@@ -3,6 +3,8 @@
  */
 export default {
   title: '订单中心',
+  loadMore: '加载更多订单',
+  noMore: '已显示全部订单',
   all: '全部',
   flight: '机票',
   hotel: '酒店',

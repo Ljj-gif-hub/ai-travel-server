@@ -22,6 +22,7 @@ export default {
   routePlanning: 'Route Planning',
   myRoutes: 'My Routes',
   routeDetail: 'Route Details',
+  noRating: 'Not rated yet',
   agentSlogan: 'Auto search · Live verify · Auto optimize',
   loadingMap: 'Loading map…',
   nearbyMap: 'Nearby Map',
@@ -116,5 +117,6 @@ export default {
   // ===== MyRoutesView (My Routes) =====
   routesAll: 'All Routes',
   createRoute: 'New Route',
+  addTrip: 'Add trip',
   autoSaved: 'Auto-saved {date}',
 }

@@ -47,7 +47,12 @@ public class PaymentService {
      */
     @Transactional
     public Map<String, Object> createPayment(Long userId, Long orderId) {
-        Order order = orderService.getOwnedOrder(userId, orderId);
+        // 锁定报价对应的订单，避免创建支付期间被并发用券或取消。
+        Order order = orderRepository.findByIdForUpdate(orderId)
+                .orElseThrow(() -> new IllegalArgumentException("订单不存在"));
+        if (!order.getUserId().equals(userId)) {
+            throw new AuthUtils.ForbiddenException("无权操作该订单");
+        }
         if (!"pending".equals(order.getStatus())) {
             throw new IllegalArgumentException("当前订单状态不可支付");
         }
@@ -92,19 +97,20 @@ public class PaymentService {
         }
         // PAYMENT-2 修复：比对回调金额与订单金额，防止金额不符的回调标记已付
         String callbackAmount = params.get("amount");
-        if (callbackAmount != null && !callbackAmount.isBlank()) {
-            Order orderForCheck = orderRepository.findByOrderNo(orderNo).orElse(null);
-            if (orderForCheck != null) {
-                try {
-                    long cbAmount = Long.parseLong(callbackAmount.trim());
-                    if (cbAmount != orderForCheck.getPrice().longValue()) {
-                        log.warn("支付回调金额不符: orderNo={}, 订单金额={}, 回调金额={}", orderNo, orderForCheck.getPrice(), cbAmount);
-                        throw new IllegalArgumentException("支付回调金额与订单金额不符");
-                    }
-                } catch (NumberFormatException e) {
-                    log.warn("支付回调金额格式非法: orderNo={}, amount={}", orderNo, callbackAmount);
-                }
-            }
+        if (callbackAmount == null || callbackAmount.isBlank()) {
+            throw new IllegalArgumentException("支付回调缺少金额");
+        }
+        long amount;
+        try {
+            // 业务层统一使用元；真实渠道必须先规范单位，不能截断小数。
+            amount = new java.math.BigDecimal(callbackAmount.trim()).longValueExact();
+        } catch (NumberFormatException | ArithmeticException e) {
+            throw new IllegalArgumentException("支付回调金额格式非法");
+        }
+        Order orderForCheck = orderRepository.findByOrderNoForUpdate(orderNo)
+                .orElseThrow(() -> new IllegalArgumentException("订单不存在"));
+        if (amount < 0 || amount != orderForCheck.getPrice()) {
+            throw new IllegalArgumentException("支付回调金额与订单金额不符");
         }
         orderService.markOrderPaid(orderNo);
         log.info("支付回调处理完成：orderNo={}", orderNo);

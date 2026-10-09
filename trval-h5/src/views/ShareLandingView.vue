@@ -99,7 +99,7 @@ onMounted(load)
   background: linear-gradient(175deg, #ede9f6 0%, #f8f7fd 100%);
   box-sizing: border-box;
   padding-bottom: calc(60px + var(--safe-area-bottom));
-  overflow-x: hidden;
+  overflow-x: clip;
 }
 .nav-bar { background: rgba(255,255,255,0.6); backdrop-filter: blur(16px); }
 .center { display: flex; justify-content: center; padding: 80px 0; }

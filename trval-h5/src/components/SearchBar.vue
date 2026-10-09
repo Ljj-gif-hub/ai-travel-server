@@ -37,9 +37,11 @@ const openPanel = () => {
 const closePanel = () => { showPanel.value = false }
 
 const positionPanel = () => {
-  if (!inputRef.value || !panelElRef.value) return
+  if (!panelElRef.value) return
   try {
-    const r = inputRef.value.getBoundingClientRect()
+    const anchor = panelRef.value?.querySelector('.edge-wrap') || inputRef.value
+    if (!anchor) return
+    const r = anchor.getBoundingClientRect()
     if (r.width === 0) return
     panelElRef.value.style.top = (r.bottom + 6) + 'px'
     panelElRef.value.style.left = r.left + 'px'
@@ -53,6 +55,7 @@ const handleClickOutside = (e) => {
   if (!showPanel.value) return
   // 点击 .edge-search 内部任何地方（输入框/wrapper/面板/遮罩）→ 不关闭
   if (panelRef.value && panelRef.value.contains(e.target)) return
+  if (panelElRef.value && panelElRef.value.contains(e.target)) return
   closePanel()
 }
 const handleKeydown = (e) => { if (e.key === 'Escape') { closePanel(); inputRef.value?.blur() } }
@@ -98,7 +101,8 @@ onUnmounted(() => {
       <input ref="inputRef" v-model="searchText" type="text" :placeholder="placeholder || t('components.searchPlaceholder')" class="edge-inp" @input="handleInput" @focus="handleFocus"/>
     </div>
 
-    <!-- ══ 全屏遮罩 + 下拉面板（fixed定位） ══ -->
+    <!-- 挂到 body，避开祖先 backdrop-filter / transform 把 fixed 困在卡片里 -->
+    <Teleport to="body">
     <Transition name="em">
       <div v-if="showPanel" class="edge-mask" @click.stop="closePanel" @touchend.stop="closePanel" @touchmove.stop/>
     </Transition>
@@ -138,6 +142,7 @@ onUnmounted(() => {
         </div>
       </div>
     </Transition>
+    </Teleport>
   </div>
 </template>
 

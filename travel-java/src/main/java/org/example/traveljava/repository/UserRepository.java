@@ -43,4 +43,9 @@ public interface UserRepository extends JpaRepository<User, Long> {
     @Modifying(clearAutomatically = true)
     @Query("update User u set u.points = u.points + :delta where u.id = :id")
     int addPoints(@Param("id") Long id, @Param("delta") int delta);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("update User u set u.points = coalesce(u.points, 0) + 5, u.lastCheckInDate = :today " +
+            "where u.id = :id and (u.lastCheckInDate is null or u.lastCheckInDate < :today)")
+    int checkInIfNewDay(@Param("id") Long id, @Param("today") java.time.LocalDate today);
 }

@@ -3,9 +3,9 @@ import vue from '@vitejs/plugin-vue'
 import Components from 'unplugin-vue-components/vite'
 import { VantResolver } from '@vant/auto-import-resolver'
 import { VitePWA } from 'vite-plugin-pwa'
-import { resolve } from 'path'
+import { fileURLToPath } from 'node:url'
 
-/** SSE 流式代理配置：告诉后端这是长连接流式请求，禁用缓冲确保实时推送 */
+/** SSE ??????????????????????????????? */
 function sseProxyConfigure(proxy) {
   proxy.on('proxyReq', (proxyReq, req) => {
     if (req.url.includes('/stream') || req.url.includes('/planner/stream')) {
@@ -15,26 +15,29 @@ function sseProxyConfigure(proxy) {
   })
 }
 
+// ?????? API_TARGET ??????????????? 3200?
+const API_TARGET = process.env.API_TARGET || 'http://localhost:3200'
+
 export default defineConfig(({ mode }) => ({
-  // 生产部署：Nginx 托管在站点根路径（此前 /ai-travel-h5/ 是给 GitHub Pages 子路径用的）
+  // ?????Nginx ??????????? /ai-travel-h5/ ?? GitHub Pages ??????
   base: '/',
   plugins: [
     vue(),
     Components({
-      resolvers: [VantResolver()],
+      resolvers: [VantResolver({ importStyle: mode !== 'test' })],
     }),
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'icons.svg'],
       manifest: {
-        name: '智能旅游助手',
-        short_name: '旅游助手',
-        description: 'AI 智能旅游规划助手 - 探索世界，从这里出发',
+        name: '??????',
+        short_name: '????',
+        description: 'AI ???????? - ??????????',
         theme_color: '#8B5CF6',
         background_color: '#F8F7FF',
         display: 'standalone',
         orientation: 'portrait',
-        // 相对路径，跟随部署 base（/ai-travel-h5/ 等），避免指向站点根目录
+        // ????????? base?/ai-travel-h5/ ????????????
         start_url: './',
         scope: './',
         icons: [
@@ -47,21 +50,22 @@ export default defineConfig(({ mode }) => ({
         ],
       },
       workbox: {
+        importScripts: ['sw-cleanup.js'],
         globPatterns: ['**/*.{js,css,html,ico,png,svg,jpg,json}'],
-        // 只 precache 应用代码与图标，排除大目录：182MB 景点图/demos/showcase
-        // 全量预缓存会让 SW 安装写 205MB 缓存，低端设备直接内存/存储压力 → 标签页 OOM
+        // ? precache ??????????????182MB ???/demos/showcase
+        // ??????? SW ??? 205MB ???????????/???? ? ??? OOM
         globIgnores: ['**/demos/**', '**/showcase/**', '**/images/**'],
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
-        // 离线兜底页：部署在根路径（base:'/'），旧配置指向不存在的 /ai-travel-h5/ 是错的
+        // ?????????????base:'/'??????????? /ai-travel-h5/ ???
         navigateFallback: '/offline.html',
         navigateFallbackDenylist: [/^\/api\//, /^\/uploads\//],
         runtimeCaching: [
           {
             urlPattern: /^https?:\/\/.*\/api\/.*/i,
-            handler: 'NetworkFirst',
-            options: { cacheName: 'api-cache', expiration: { maxEntries: 50, maxAgeSeconds: 300 } },
+            // ??????????????????????????????
+            handler: 'NetworkOnly',
           },
-          // 离线地图（B5）：OSM 瓦片 CacheFirst（Leaflet 离线底图载体）
+          // ?????B5??OSM ?? CacheFirst?Leaflet ???????
           {
             urlPattern: /^https:\/\/[abc]\.tile\.openstreetmap\.org\/.*/i,
             handler: 'CacheFirst',
@@ -71,7 +75,7 @@ export default defineConfig(({ mode }) => ({
               cacheableResponse: { statuses: [0, 200] },
             },
           },
-          // 高德瓦片/资源：best-effort 缓存（带鉴权参数，缓存失败静默降级）
+          // ????/???best-effort ??????????????????
           {
             urlPattern: /^https:\/\/.*\.(amap|gaode)\.com\/.*/i,
             handler: 'StaleWhileRevalidate',
@@ -87,18 +91,18 @@ export default defineConfig(({ mode }) => ({
   ],
   resolve: {
     alias: {
-      '@': resolve(__dirname, 'src'),
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
   server: {
     proxy: {
-      '/uploads': { target: 'http://localhost:3200', changeOrigin: true },
-      // 安全：Agent 请求统一走 Spring Boot（/api/agent → 3200 → 3201），
-      // 由 Spring 透传 JWT 鉴权 + 附加共享密钥，禁止前端直连 Python Agent。
-      // SSE 流式代理：禁用缓冲，确保实时推送；SSE 长连接放宽到 10 分钟，
-      // 普通接口 5 分钟兜底（此前 30 分钟让挂死的连接长期占用代理资源）。
+      '/uploads': { target: API_TARGET, changeOrigin: true },
+      // ???Agent ????? Spring Boot?/api/agent ? 3200 ? 3201??
+      // ? Spring ?? JWT ?? + ????????????? Python Agent?
+      // SSE ?????????????????SSE ?????? 10 ???
+      // ???? 5 ??????? 30 ??????????????????
       '/api/travel': {
-        target: 'http://localhost:3200',
+        target: API_TARGET,
         changeOrigin: true,
         timeout: 600000,
         proxyTimeout: 600000,
@@ -106,7 +110,7 @@ export default defineConfig(({ mode }) => ({
         configure: sseProxyConfigure,
       },
       '/api/agent': {
-        target: 'http://localhost:3200',
+        target: API_TARGET,
         changeOrigin: true,
         timeout: 600000,
         proxyTimeout: 600000,
@@ -114,7 +118,7 @@ export default defineConfig(({ mode }) => ({
         configure: sseProxyConfigure,
       },
       '/api': {
-        target: 'http://localhost:3200',
+        target: API_TARGET,
         changeOrigin: true,
         timeout: 300000,
         proxyTimeout: 300000,

@@ -9,11 +9,14 @@ import { getHotDestinations, getSurroundTour } from '../api/destination'
 import EmptyState from '../components/EmptyState.vue'
 import AIChatDialog from '../components/AIChatDialog.vue'
 import LazyImage from '../components/LazyImage.vue'
+import { HOME_PLAN_SAFE } from '../data/homePlanImages'
+import { useStickyAfterTrigger } from '../composables/useStickyAfterTrigger'
 
 defineOptions({ name: 'TripsView' })
 
 const router = useRouter()
 const { t } = useI18n()
+const { trigger: tripsTopbarTrigger, visible: tripsTopbarVisible } = useStickyAfterTrigger()
 
 const trips = ref([])
 const isLoading = ref(false)
@@ -63,56 +66,6 @@ const onGuideImgError = (e, city) => {
   img.dataset.fb = '1'
   img.src = getCityImage(city)
 }
-
-const carouselImages = ref([])
-const currentCarouselIndex = ref(0)
-let carouselTimer = null
-
-const staticImageMap = ref({})
-
-const loadCarouselImages = async () => {
-  try {
-    // 加载静态图片映射
-    const imgResp = await fetch('/city-images.json')
-    if (imgResp.ok) Object.assign(staticImageMap.value, await imgResp.json())
-  } catch {}
-
-  try {
-    const resp = await fetch('/api/map/scenic-photos')
-    const json = await resp.json()
-    if (json.code === 0 && json.data?.length > 0) carouselImages.value = json.data
-    if (carouselImages.value.length === 0) {
-      carouselImages.value = [
-        staticImageMap.value['桂林'] || '/images/landmarks/1a57149358c0.jpg',
-        staticImageMap.value['张家界'] || '/images/landmarks/1260698db1f0.jpg',
-        staticImageMap.value['成都'] || '/images/landmarks/14bf5c897776.jpg',
-        staticImageMap.value['黄山'] || '/images/landmarks/1986d7d41d8a.jpg',
-      ]
-    }
-    startCarousel()
-  } catch (e) {}
-}
-
-const startCarousel = () => {
-  if (carouselTimer) clearInterval(carouselTimer)
-  carouselTimer = setInterval(() => {
-    currentCarouselIndex.value = (currentCarouselIndex.value + 1) % carouselImages.value.length
-  }, 4000)
-}
-const stopCarousel = () => { if (carouselTimer) { clearInterval(carouselTimer); carouselTimer = null } }
-
-/* 【AI 卡背景】特意选宏伟干净的纯自然风光（与线路卡 carouselImages 轮播图区分开，避免重合）。
-   固定 hash 路径直达本地图库，不依赖 city-images JSON，保证必出图。 */
-const AI_HERO_HASHES = ['895acb85a9be', 'ba9c1bc0df23', 'c06ee7552e4d', '1ca49d9ba37e'] // 华山 / 泰山 / 九寨沟 / 黄果树
-const aiHeroImages = computed(() => AI_HERO_HASHES.map(h => `/images/landmarks/${h}.jpg`))
-const aiHeroIndex = ref(0)
-let aiHeroTimer = null
-const startAiHero = () => {
-  if (aiHeroTimer) clearInterval(aiHeroTimer)
-  if (aiHeroImages.value.length < 2) return
-  aiHeroTimer = setInterval(() => { aiHeroIndex.value = (aiHeroIndex.value + 1) % aiHeroImages.value.length }, 5000)
-}
-const stopAiHero = () => { if (aiHeroTimer) { clearInterval(aiHeroTimer); aiHeroTimer = null } }
 
 const showNearbyMap = ref(false) // 周边游全屏弹层
 const nearbyMapInstance = ref(null)
@@ -420,6 +373,14 @@ const cardRoute = (plan) => { if (!plan.planData?.dayPlans) return ''; const lin
 const cardMeta = (plan) => { const days = plan.days || 0; const locationCount = getAttractions(plan).length; const parts = []; if (plan.travelDate) { const start = new Date(plan.travelDate); const end = new Date(start); end.setDate(end.getDate()+days-1); const fmt = d => t('trips.dateFormat', { month: d.getMonth()+1, day: d.getDate() }); parts.push(`${fmt(start)}-${fmt(end)}`) } else if (plan.createdAt) { parts.push(t('trips.dateFormat', { month: new Date(plan.createdAt).getMonth()+1, day: new Date(plan.createdAt).getDate() })) }; if (days>0) parts.push(t('trips.totalDays', { days })); if (locationCount>0) parts.push(t('trips.spotCount', { count: locationCount })); return parts.join('·') }
 // 【hero 改版】「我的线路」摘要卡：取最新一条已保存行程（无则展示空态引导）；实时统计线路数
 const latestPlan = computed(() => tripPlans.value[0] || null)
+const latestPlanCover = computed(() => {
+  const destination = toShortCity(latestPlan.value?.destination?.trim())
+  if (!destination) return HOME_PLAN_SAFE['漓江'].image
+  return HOME_PLAN_SAFE[destination]?.image
+    || Object.values(HOME_PLAN_SAFE).find(image => image.city === destination)?.image
+    || cityImageMap.value[destination] || ''
+})
+const failedPlanCover = ref('')
 const routeCount = computed(() => tripPlans.value.length)
 const isLoggedIn = computed(() => !!getToken())
 const statusLabel = (s) => ({ upcoming: t('trips.statusUpcoming'), doing: t('trips.statusDoing'), done: t('trips.statusDone'), draft: t('trips.statusDraft') }[s] || s)
@@ -508,38 +469,32 @@ const useTemplate = async (tmpl) => {
 let dataLoaded = false
 
 onMounted(() => {
-  loadCityImageMap(); loadTemplates(); startAiHero()
+  loadCityImageMap(); loadTemplates()
   if (getToken()) {
     // L-TRIPS-2：注册时同步拉取「我的线路」，让线路卡实时显示已保存数量与最新摘要
-    loadTrips(); loadCityGuides(); loadHotDestinations(); loadCarouselImages()
+    loadTrips(); loadCityGuides(); loadHotDestinations()
     dataLoaded = true
   }
 })
 
 onActivated(() => {
-  loadCityImageMap(); loadTemplates(); startAiHero()
+  loadCityImageMap(); loadTemplates()
   if (!getToken()) return
   // 每次返回都刷新「我的线路」，保证数量/摘要实时更新（去别处建了新线路即点即更新）
   loadTrips()
   if (!dataLoaded) {
-    // 首次未加载（含游客先开页→别处登录→返回）→ 补全首次加载，保证轮播图可用
-    loadCityGuides(); loadHotDestinations(); loadCarouselImages()
+    // 首次未加载（含游客先开页→别处登录→返回）→ 补全城市推荐
+    loadCityGuides(); loadHotDestinations()
     dataLoaded = true
-  } else if (carouselImages.value.length === 0) {
-    // 数据已加载但轮播图缺失（首屏请求失败）→ 补加载，避免 startCarousel 对空数组取模
-    loadCarouselImages()
-  } else {
-    startCarousel()
   }
 })
 
 onDeactivated(() => {
-  isLoading.value = false; loadError.value = false; showMoreMenu.value = false; stopCarousel(); stopAiHero()
+  isLoading.value = false; loadError.value = false; showMoreMenu.value = false
   dataLoaded = false // L-TRIPS-1 修复：离开后复位，返回时重新加载
 })
 
 onUnmounted(() => {
-  stopCarousel(); stopAiHero()
   // MAPLEAK-2 修复：Leaflet 实例无 destroy()，双判断销毁防泄漏
   if (nearbyMapInstance.value) {
     try { if (typeof nearbyMapInstance.value.destroy === 'function') nearbyMapInstance.value.destroy() } catch (e) {}
@@ -551,48 +506,58 @@ onUnmounted(() => {
 
 <template>
   <div class="trips-page">
-    <!-- 漂浮粒子 — 已禁用 -->
-    <van-nav-bar safe-area-inset-top class="nav-bar">
-      <template #title><span class="nav-title">{{ t('trips.navTitle') }}</span></template>
-      <template #right>
-        <div class="nav-actions">
-          <div class="nav-btn" @click="goToAgentPlanner"><van-icon name="add" size="20" color="#7C3AED" /></div>
-          <div class="nav-btn" @click="showMoreMenu = true"><van-icon name="ellipsis" size="20" color="#7C3AED" /></div>
-        </div>
-      </template>
-    </van-nav-bar>
-    <van-popup v-model:show="showMoreMenu" position="top" :style="{ width:'160px', top:'calc(env(safe-area-inset-top,0px)+48px)', right:'8px', borderRadius:'14px' }" overlay-class="no-overlay">
+    <van-popup v-model:show="showMoreMenu" position="top" class="trips-more-popup" overlay-class="no-overlay">
       <div class="more-menu">
         <div v-for="item in [{key:'import',icon:'down',label:t('trips.importTrips')},{key:'batchDelete',icon:'delete-o',label:t('trips.batchDelete')},{key:'export',icon:'share-o',label:t('trips.exportTrips')},{key:'settings',icon:'setting-o',label:t('trips.tripSettings')}]" :key="item.key" class="more-item" @click="handleMoreAction(item.key)"><van-icon :name="item.icon" size="16" color="var(--text-secondary)" /><span>{{ item.label }}</span></div>
       </div>
     </van-popup>
 
+    <header class="trips-topbar" :class="{ visible: tripsTopbarVisible }" :aria-hidden="!tripsTopbarVisible" :inert="!tripsTopbarVisible">
+      <span class="trips-topbar-title">{{ t('trips.routePlanning') }}</span>
+      <div class="header-tools">
+        <button type="button" class="header-tool" :aria-label="t('trips.addTrip')" @click="goToAgentPlanner">
+          <van-icon name="plus" size="18" />
+        </button>
+        <button type="button" class="header-tool" :aria-label="t('common.more')" @click="showMoreMenu = true">
+          <van-icon name="ellipsis" size="18" />
+        </button>
+      </div>
+    </header>
+
     <div class="trips-scroll">
       <div class="trips-inner">
         <div class="plan-sec-head">
           <span class="plan-sec-title">{{ t('trips.routePlanning') }}</span>
-          <span class="plan-sec-link" @click="goMyRoutes">{{ t('trips.myRoutes') }} <van-icon name="arrow" size="12" /></span>
+          <div class="header-tools">
+            <button type="button" class="header-tool nav-action" :aria-label="t('trips.addTrip')" @click="goToAgentPlanner">
+              <van-icon name="plus" size="18" />
+            </button>
+            <button type="button" class="header-tool nav-more" :aria-label="t('common.more')" @click="showMoreMenu = true">
+              <van-icon name="ellipsis" size="18" />
+            </button>
+          </div>
         </div>
 
-        <!-- 【hero 改版】截图2格局：左小（AI 开始规划）右大（我的线路），非对称 -->
         <div class="plan-grid">
           <div class="plan-card plan-card-ai entrance-item entrance-d1" @click="goToAgentPlanner">
-            <!-- 【AI 卡背景】宏伟自然风光轮播（华山/泰山/九寨沟/黄果树），与线路卡轮播区分开 -->
-            <div v-if="aiHeroImages.length" class="plan-ai-bg">
-              <div v-for="(img, i) in aiHeroImages" :key="i" class="plan-ai-bg-item" :class="{ active: i === aiHeroIndex }" :style="{ backgroundImage: `url(${img})` }" />
+            <span class="plan-ai-badge">AI</span>
+            <div class="plan-ai-icons" aria-hidden="true">
+              <span class="plan-ai-ic ic-pin"><van-icon name="location" size="16" /></span>
+              <span class="plan-ai-ic ic-cal"><van-icon name="calendar-o" size="14" /></span>
+              <span class="plan-ai-ic ic-cam"><van-icon name="photograph" size="14" /></span>
+              <span class="plan-ai-ic ic-map"><van-icon name="guide-o" size="14" /></span>
             </div>
-            <div v-else class="plan-ai-bg plan-ai-bg-fallback" />
-            <div class="plan-ai-shade" />
-            <span class="plan-card-label plan-card-label-ai">{{ t('trips.heroBadge') }}</span>
-            <button class="plan-ai-btn" @click.stop="goToAgentPlanner">{{ t('trips.startPlanning') }}</button>
+            <button type="button" class="plan-ai-btn" @click.stop="goToAgentPlanner">
+              <van-icon name="guide-o" size="12" />{{ t('trips.startPlanning') }}
+            </button>
           </div>
-
           <div class="plan-card plan-card-route entrance-item entrance-d2" @click="goMyRoutes">
-            <div v-if="carouselImages.length" class="plan-route-bg" :style="{ backgroundImage: `url(${carouselImages[0]})` }" />
-            <div v-else class="plan-route-bg plan-route-bg-fallback" />
-            <div class="plan-route-shade" />
-            <span class="plan-card-label plan-card-label-route">{{ t('trips.myRoutes') }}</span>
-            <span v-if="routeCount" class="plan-route-count">{{ t('trips.routesCount', { n: routeCount }) }}</span>
+            <div class="plan-route-cover">
+              <img v-if="latestPlanCover && failedPlanCover !== latestPlanCover" :key="latestPlanCover" :src="latestPlanCover" :alt="latestPlan?.destination || ''" class="plan-route-bg" @error="failedPlanCover = latestPlanCover" />
+              <div v-else class="plan-route-bg plan-route-bg-fallback" />
+              <span class="plan-card-label-route plan-sec-link">{{ t('trips.myRoutes') }}</span>
+              <span v-if="routeCount" class="plan-route-count">{{ t('trips.routesCount', { n: routeCount }) }}</span>
+            </div>
             <div class="plan-route-body">
               <div class="plan-route-title" v-if="latestPlan">{{ cardTitle(latestPlan) }}</div>
               <div class="plan-route-title" v-else>{{ t('trips.noRouteTitle') }}</div>
@@ -602,11 +567,12 @@ onUnmounted(() => {
             </div>
           </div>
         </div>
+        <span ref="tripsTopbarTrigger" class="trips-topbar-trigger" aria-hidden="true" />
 
         <!-- 周边游地图入口行（替换原全图周边游大卡） -->
         <div class="map-entry-row entrance-item entrance-d3" @click="goMap">
           <div class="map-entry-left"><van-icon name="location-o" size="18" color="#8B5CF6" /><span class="map-entry-title">{{ t('trips.nearbyMap') }}</span></div>
-          <span class="map-entry-go">{{ t('trips.exploreNearby') }}</span>
+          <van-icon name="arrow" size="14" color="#94A3B8" />
         </div>
 
         <van-popup v-model:show="showNearbyMap" position="bottom" class="tour-fullscreen" @closed="closeNearbyMap">
@@ -733,7 +699,11 @@ onUnmounted(() => {
               </div>
               <div class="guide-card-body">
                 <div class="guide-card-name">{{ attr.name }}</div>
-                <div class="guide-card-meta" v-if="attr.rating"><span class="meta-star">⭐ {{ Number(attr.rating).toFixed(1) }}</span><span class="meta-go">{{ t('trips.routeDetail') }}</span></div>
+                <div class="guide-card-meta">
+                  <span v-if="attr.rating" class="meta-star">⭐ {{ Number(attr.rating).toFixed(1) }}</span>
+                  <span v-else class="meta-unrated">{{ t('trips.noRating') }}</span>
+                  <span class="meta-go">{{ t('trips.routeDetail') }}</span>
+                </div>
               </div>
             </div>
           </div>
@@ -795,15 +765,29 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.trips-page { width:100%; min-height:100vh; background:transparent; position:relative; display:flex; flex-direction:column; padding-bottom:calc(10px + 48px + 12px + var(--safe-area-bottom, 0px)); }
-.trips-scroll { flex:1; overflow-y:auto; overflow-x:hidden; -webkit-overflow-scrolling:touch; }
-.trips-inner { max-width:480px; margin:0 auto; padding:0 12px; }
-:deep(.nav-bar) { background:linear-gradient(160deg, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.2) 40%, rgba(255,255,255,0.55) 100%),rgba(255,255,255,0.6) !important; backdrop-filter:blur(22px) saturate(180%); -webkit-backdrop-filter:blur(22px) saturate(180%); border-bottom:0.5px solid rgba(255,255,255,0.55) !important; box-shadow:inset 0 1px 0 rgba(255,255,255,0.65) !important; }
-:deep(.nav-bar .van-nav-bar__title) { color:var(--text-primary); font-weight:600; }
-.nav-title { font-size:17px; }
-.nav-actions { display:flex; gap:4px; }
-.nav-btn { width:40px; height:40px; min-width:40px; min-height:40px; border-radius:50%; background:rgba(139,92,246,0.08); display:flex; align-items:center; justify-content:center; cursor:pointer; transition:all 0.2s; }
-.nav-btn:active { background:rgba(139,92,246,0.18); transform:scale(0.9); }
+.trips-page { width:100%; min-height:100vh; background:transparent; position:relative; padding-bottom:calc(10px + 48px + 12px + var(--safe-area-bottom, 0px)); }
+.trips-inner { max-width:480px; margin:0 auto; padding:0 16px; }
+.trips-topbar {
+  position:fixed; top:0; left:50%; z-index:1000; width:min(100%, 480px);
+  display:flex; align-items:center; justify-content:space-between; gap:8px;
+  min-height:56px; padding:calc(env(safe-area-inset-top, 0px) + 7px) 16px 7px;
+  opacity:0; pointer-events:none; transform:translate3d(-50%, -100%, 0);
+  transition:opacity 0.3s ease, transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+  background:rgba(255,255,255,0.92);
+  backdrop-filter:blur(18px) saturate(160%);
+  -webkit-backdrop-filter:blur(18px) saturate(160%);
+  border-bottom:0.5px solid rgba(0,0,0,0.06);
+}
+.trips-topbar.visible { opacity:1; pointer-events:auto; transform:translate3d(-50%, 0, 0); }
+.trips-topbar-title { font-size:17px; font-weight:700; color:var(--text-primary); letter-spacing:-0.2px; }
+.trips-topbar-trigger { display:block; width:1px; height:1px; }
+.header-tools { display:flex; align-items:center; gap:2px; flex-shrink:0; }
+.header-tool {
+  width:36px; height:36px; padding:0; border:0; border-radius:10px;
+  color:var(--text-secondary); background:transparent;
+  display:flex; align-items:center; justify-content:center; cursor:pointer;
+}
+.header-tool:active { background:rgba(139,92,246,0.10); color:#7C3AED; }
 .more-menu { padding:8px; }
 .more-item { display:flex; align-items:center; gap:10px; padding:12px 14px; border-radius:10px; cursor:pointer; font-size:14px; color:#475569; transition:background 0.15s; }
 .more-item:active { background:#faf5ff; }
@@ -815,38 +799,58 @@ onUnmounted(() => {
 .guide-line::before { content:''; position:absolute; top:-4px; left:-5px; width:12px; height:12px; border-radius:50%; background:#8B5CF6; box-shadow:0 0 10px rgba(139,92,246,0.5), 0 0 20px rgba(139,92,246,0.2); animation:nodePulse 2.5s ease-in-out infinite; }
 @keyframes nodePulse { 0%,100% { box-shadow:0 0 8px rgba(139,92,246,0.4), 0 0 16px rgba(139,92,246,0.15); } 50% { box-shadow:0 0 14px rgba(139,92,246,0.65), 0 0 28px rgba(139,92,246,0.3); } }
 
-.plan-sec-head { display:flex; align-items:center; justify-content:space-between; padding:0 2px 6px; margin-top:14px; }
-.plan-sec-title { font-size:16px; font-weight:700; color:var(--text-primary); }
-.plan-sec-link { display:flex; align-items:center; gap:3px; font-size:13px; color:var(--text-secondary); font-weight:500; cursor:pointer; padding:4px 10px; border-radius:10px; background:rgba(139,92,246,0.06); transition:background 0.15s; }
-.plan-sec-link:active { background:rgba(139,92,246,0.14); }
+.plan-sec-head { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:4px 0 10px; padding-top:calc(8px + env(safe-area-inset-top, 0px)); }
+.plan-sec-title { font-size:17px; font-weight:700; color:var(--text-primary); letter-spacing:-0.2px; line-height:36px; }
 
-/* 【hero 改版】非对称：左小（AI 开始规划）右大（我的线路）+ 周边游地图入口行 */
-.plan-grid { display:grid; grid-template-columns:1fr 1.4fr; gap:12px; margin-top:6px; align-items:stretch; }
-.plan-card { position:relative; overflow:hidden; border-radius:20px; cursor:pointer; box-shadow:inset 0 1px 0 rgba(255,255,255,0.5), 0 4px 16px rgba(0,0,0,0.05); transition:transform 0.25s, box-shadow 0.25s; }
+.plan-grid { display:grid; grid-template-columns:2fr 3fr; gap:10px; align-items:stretch; }
+.plan-card {
+  overflow:hidden; border-radius:16px; cursor:pointer;
+  background:linear-gradient(160deg, rgba(255,255,255,0.72) 0%, rgba(255,255,255,0.22) 40%, rgba(255,255,255,0.4) 100%), rgba(255,255,255,0.72);
+  border:1px solid rgba(255,255,255,0.7);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.6), 0 2px 10px rgba(0,0,0,0.04);
+}
 .plan-card:active { transform:scale(0.98); }
 
-.plan-card-ai { min-height:152px; display:block; background:#1e1b2e; }
-.plan-card-label { display:inline-flex; align-items:center; padding:4px 9px; border-radius:9px; font-size:11px; font-weight:600; color:#7C3AED; background:rgba(139,92,246,0.10); }
-.plan-ai-bg { position:absolute; inset:0; }
-.plan-ai-bg-item { position:absolute; inset:0; background-size:cover; background-position:center; opacity:0; transition:opacity 1.2s ease-in-out; }
-.plan-ai-bg-item.active { opacity:1; }
-.plan-ai-bg-fallback { background:linear-gradient(135deg,#8B5CF6,#6366F1); }
-.plan-ai-shade { position:absolute; inset:0; background:linear-gradient(180deg, rgba(0,0,0,0.10) 0%, rgba(0,0,0,0.08) 48%, rgba(0,0,0,0.46) 100%); }
-.plan-card-label-ai { position:absolute; top:12px; left:12px; z-index:2; color:#fff; background:rgba(0,0,0,0.28); backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px); }
-.plan-ai-btn { position:absolute; bottom:12px; left:50%; transform:translateX(-50%); z-index:2; padding:8px 20px; border:none; border-radius:18px; background:rgba(255,255,255,0.20); backdrop-filter:blur(12px) saturate(160%); -webkit-backdrop-filter:blur(12px) saturate(160%); color:#fff; font-size:12px; font-weight:600; cursor:pointer; border:1px solid rgba(255,255,255,0.42); box-shadow:0 4px 14px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.35); white-space:nowrap; }
-.plan-ai-btn:active { transform:translateX(-50%) scale(0.96); }
+.plan-card-ai {
+  display:flex; flex-direction:column;
+  background:radial-gradient(120% 80% at 90% 0%, rgba(196,181,253,0.7), transparent 55%), linear-gradient(165deg, #f3e8ff 0%, #ddd6fe 48%, #c4b5fd 100%);
+}
+.plan-ai-badge { align-self:flex-start; margin:7px 0 0 8px; padding:1px 6px; border-radius:6px; background:#7C3AED; color:#fff; font-size:9px; font-weight:750; letter-spacing:0.04em; }
+.plan-ai-icons { position:relative; flex:1; min-height:44px; }
+.plan-ai-icons::before {
+  content:''; position:absolute; left:22%; right:22%; top:16%; bottom:18%;
+  border:1.5px dashed rgba(124,58,237,0.28); border-radius:46% 54% 48% 52%;
+  pointer-events:none;
+}
+.plan-ai-ic {
+  position:absolute; width:28px; height:28px; border-radius:50%;
+  display:flex; align-items:center; justify-content:center;
+  background:rgba(255,255,255,0.72); color:#7C3AED;
+  box-shadow:0 2px 8px rgba(124,58,237,0.12);
+}
+.ic-pin { top:8%; left:36%; width:32px; height:32px; }
+.ic-cal { top:38%; left:8%; }
+.ic-cam { top:34%; right:8%; }
+.ic-map { top:62%; left:38%; }
+.plan-ai-btn {
+  display:flex; align-items:center; justify-content:center; gap:3px;
+  margin:2px 10px 8px; min-height:28px; padding:0 6px; border:0; border-radius:14px;
+  color:#6D28D9; background:rgba(255,255,255,0.78);
+  box-shadow:0 2px 8px rgba(124,58,237,0.12);
+  font-size:11px; font-weight:700; cursor:pointer; white-space:nowrap;
+}
+.plan-ai-btn:active { transform:scale(0.97); }
 
-.plan-card-route { min-height:172px; background:#1e1b2e; }
-.plan-route-bg { position:absolute; inset:0; background-size:cover; background-position:center; }
-.plan-route-bg-fallback { background:linear-gradient(135deg,#667eea 0%,#764ba2 50%,#5b2d8e 100%); }
-.plan-route-shade { position:absolute; inset:0; background:linear-gradient(180deg, rgba(0,0,0,0.05) 0%, rgba(0,0,0,0.58) 100%); }
-.plan-card-label-route { position:absolute; top:12px; left:12px; z-index:2; color:#fff; background:rgba(0,0,0,0.28); backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px); }
-.plan-route-count { position:absolute; top:12px; right:12px; z-index:2; font-size:10px; color:#fff; padding:3px 8px; border-radius:9px; background:rgba(0,0,0,0.30); backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px); }
-.plan-route-body { position:absolute; left:14px; right:14px; bottom:12px; z-index:2; }
-.plan-route-title { font-size:15px; font-weight:700; color:#fff; text-shadow:0 1px 4px rgba(0,0,0,0.4); }
-.plan-route-meta { margin-top:5px; font-size:11px; color:rgba(255,255,255,0.88); text-shadow:0 1px 3px rgba(0,0,0,0.35); }
+.plan-route-cover { position:relative; height:96px; background:#1e1b2e; }
+.plan-route-bg { width:100%; height:100%; object-fit:cover; display:block; }
+.plan-route-bg-fallback { width:100%; height:100%; background:url('/images/landmarks/ac3fee83cf73.jpg') center/cover; }
+.plan-card-label-route { position:absolute; top:8px; left:8px; z-index:2; padding:3px 8px; border-radius:8px; background:rgba(0,0,0,0.38); color:#fff; font-size:10px; font-weight:650; }
+.plan-route-count { position:absolute; top:8px; right:8px; z-index:2; padding:3px 8px; border-radius:8px; background:rgba(0,0,0,0.38); color:#fff; font-size:10px; }
+.plan-route-body { padding:8px 10px 10px; }
+.plan-route-title { font-size:13px; font-weight:750; color:var(--text-primary); line-height:1.35; display:-webkit-box; -webkit-line-clamp:2; line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.plan-route-meta { margin-top:4px; font-size:11px; color:var(--text-secondary); overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 
-.map-entry-row { display:flex; align-items:center; justify-content:space-between; margin-top:12px; padding:15px 16px; border-radius:16px; background:linear-gradient(160deg, rgba(255,255,255,0.6) 0%, rgba(255,255,255,0.14) 40%, rgba(255,255,255,0.3) 100%), rgba(255,255,255,0.55); border:1px solid rgba(255,255,255,0.6); box-shadow:inset 0 1px 0 rgba(255,255,255,0.5), 0 2px 10px rgba(0,0,0,0.03); cursor:pointer; }
+.map-entry-row { display:flex; align-items:center; justify-content:space-between; margin-top:12px; padding:14px 16px; border-radius:16px; background:linear-gradient(160deg, rgba(255,255,255,0.6) 0%, rgba(255,255,255,0.14) 40%, rgba(255,255,255,0.3) 100%), rgba(255,255,255,0.55); border:1px solid rgba(255,255,255,0.6); box-shadow:inset 0 1px 0 rgba(255,255,255,0.5), 0 2px 10px rgba(0,0,0,0.03); cursor:pointer; }
 .map-entry-left { display:flex; align-items:center; gap:8px; }
 .map-entry-title { font-size:15px; font-weight:700; color:var(--text-primary); }
 .map-entry-go { font-size:12px; font-weight:600; color:#8B5CF6; cursor:pointer; }
@@ -936,6 +940,7 @@ onUnmounted(() => {
 .guide-card-name { font-size:15px; font-weight:700; color:var(--text-primary); line-height:1.4; display:-webkit-box; -webkit-line-clamp:2; line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
 .guide-card-meta { font-size:12px; margin-top:8px; display:flex; align-items:center; justify-content:space-between; }
 .meta-star { color:#F59E0B; font-weight:600; }
+.meta-unrated { color:var(--text-secondary); }
 .meta-go { color:#8B5CF6; font-weight:500; font-size:12px; }
 
 .templates-section { margin-bottom:18px; }
@@ -1141,18 +1146,15 @@ html[data-theme='dark'] .tour-routes-list { background:var(--bg-page); }
 html[data-theme='dark'] .route-card { background:var(--bg-card-solid); border-color:var(--glass-border); }
 html[data-theme='dark'] .route-tag { color:var(--text-secondary); }
 
-/* 【hero 改版】深色模式 */
-html[data-theme='dark'] .plan-card-ai { background:var(--bg-card-solid); border-color:var(--glass-border); }
-html[data-theme='dark'] .plan-card-label { color:#A78BFA; background:rgba(139,92,246,0.16); }
-html[data-theme='dark'] .plan-card-route,
-html[data-theme='dark'] .plan-route-bg-fallback { background:var(--bg-card-solid); }
+html[data-theme='dark'] .trips-topbar { background:rgba(24,27,40,0.9); border-bottom-color:rgba(255,255,255,0.06); }
+html[data-theme='dark'] .plan-card,
 html[data-theme='dark'] .map-entry-row { background:var(--bg-card-solid); border-color:var(--glass-border); }
+html[data-theme='dark'] .plan-card-ai { background:linear-gradient(165deg, rgba(139,92,246,0.28), rgba(99,102,241,0.16)); }
+html[data-theme='dark'] .plan-ai-ic { background:rgba(255,255,255,0.08); color:#c4b5fd; }
+html[data-theme='dark'] .plan-route-cover { background:var(--bg-card-solid); }
 
 @media screen and (max-width:360px) {
   .hero-glass-btn { padding:9px 18px; bottom:16px; }
-  .plan-grid { gap:8px; }
-  .plan-card { border-radius:16px; }
-  .plan-card-ai, .plan-card-route { min-height:140px; }
   .guide-card { width:164px; }
   .guide-card-body { padding:10px 11px 12px; }
   .guide-card-name { font-size:13px; }
@@ -1166,6 +1168,20 @@ html[data-theme='dark'] .map-entry-row { background:var(--bg-card-solid); border
   -webkit-overflow-scrolling: touch; scrollbar-width: none;
 }
 .h-scroll::-webkit-scrollbar { display: none; }
+
+.trips-more-popup.van-popup--top {
+  left: auto !important;
+  right: 8px;
+  width: 160px;
+  top: calc(env(safe-area-inset-top, 0px) + 48px);
+  border-radius: 14px;
+  overflow: hidden;
+}
+@media (min-width: 481px) {
+  .trips-more-popup.van-popup--top {
+    right: calc((100% - 480px) / 2 + 8px);
+  }
+}
 
 /* ==================== 深色模式（B4） ==================== */
 html[data-theme='dark'] .nearby-card { background: var(--bg-card-solid); }
